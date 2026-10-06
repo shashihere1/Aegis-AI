@@ -14,5 +14,5 @@ node_modules/
 web/dist/
 models/
 
-# Working docs kept locally only (not pushed to the shared repo).
-docs/
+# The full working implementation plan is kept locally only (not pushed to the shared repo).
+docs/plan.md

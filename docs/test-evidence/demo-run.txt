@@ -1,0 +1,61 @@
+
+==============================================================================
+S0  Registry at enterprise scale
+==============================================================================
+  1247 agents, 80 in PRD on Azure (stats + filtered page in 9 ms)
+
+==============================================================================
+S1  Onboarding with segregation of duties
+==============================================================================
+  KYC-Verification-Agent       AGT-56E6-36ED  risk=medium {'autonomy': 3, 'data_class': 7, 'tool_criticality': 4, 'exposure': 3}  status=active
+  Payments-Agent               AGT-0595-9132  risk=medium {'autonomy': 3, 'data_class': 7, 'tool_criticality': 8, 'exposure': 3}  status=active
+  Ava-Customer-Service-Agent   AGT-D274-E198  risk=high   {'autonomy': 3, 'data_class': 7, 'tool_criticality': 4, 'exposure': 10}  status=active
+  Registered by priya.raman, approved by sanne.bakker; identities provisioned with private_key_jwt keys.
+
+==============================================================================
+S2  Governed journey: mandate -> A2A delegation -> PII redaction
+==============================================================================
+  Mandate mdt_87ff308a935c4c43af98 for user:jan.devries, TTL 300 s
+  Intent categories: ['customer.kyc.verify', 'customer.profile.update']
+  KYC delegated mandate: act chain {'sub': 'agent:AGT-56E6-36ED', 'act': {'sub': 'agent:AGT-D274-E198'}}, purpose narrowed to ['customer.kyc.verify']
+  KYC result as seen by Ava: verified=True bsn=<BSN> iban=<IBAN_CODE>
+  Task closed by Ava -> mandate status: completed
+  LLM call via gateway: 7+7 tokens, EUR 0.000088, 1.3 ms ('Summary: the request was handled.')
+  lineage: user:jan.devries -[initiated]-> agent:AGT-D274-E198
+  lineage: agent:AGT-D274-E198 -[delegated_to]-> agent:AGT-56E6-36ED
+  lineage: agent:AGT-D274-E198 -[invoked/allow]-> tool:a2a:AGT-56E6-36ED
+  lineage: agent:AGT-56E6-36ED -[invoked/allow]-> tool:kyc.verify_document
+  lineage: tool:kyc.verify_document -[read]-> data:confidential
+  lineage: agent:AGT-D274-E198 -[invoked/allow]-> tool:crm.update_address
+  lineage: tool:crm.update_address -[read]-> data:internal
+
+==============================================================================
+S3  High-value transfer: human approval bound to the exact action
+==============================================================================
+  Payments agent -> auth-required: Transfers above the threshold to a new beneficiary require human approval
+  Replay with EUR 45,000 using the same approval -> DENIED ['APR-001']
+  Approved by sanne.bakker -> completed, payment PAY-00001
+
+==============================================================================
+S4  Attack: poisoned document -> containment -> cascade revocation
+==============================================================================
+  step delegate_kyc   -> ok
+  step read_document  -> ok
+  step send_email     -> DENIED ['IFC-001']
+  alert DET-02 [critical] Exfiltration attempt blocked (lethal trifecta)
+  alert DET-01 [high] Prompt injection detected in output of docs.read_document
+  Playbook suspended Ava; cascade revoked 2 mandates across ['AGT-56E6-36ED', 'AGT-D274-E198'] in 74 ms (whole scene)
+  KYC agent's delegated mandate now fails: mandate revoked (jti tok_2a50ddeacfc1454cb66353049603fdb3 revoked: DET-02: Exfiltration attempt blocked (lethal trifecta))
+  Emails actually sent: 0
+
+==============================================================================
+S5  Shadow agent discovery
+==============================================================================
+  finding idp-client:marketing-lead-scraper via ['idp'] (1 hit)
+  finding api-key:6aaf4c1bfd7818fe via ['gateway'] (1 hit)
+
+==============================================================================
+S8  Evidence
+==============================================================================
+  Ledger: 82 hash-chained entries, integrity ok=True
+  Decisions recorded: 12 (allow, deny, require_approval), policy rego-d56293c6d284

@@ -1,0 +1,19 @@
+# Demo flow
+
+Run `python -m aegis_demo.run` for the narrated version of scenes S0–S5 and S8 (output:
+`docs/test-evidence/demo-run.txt`). The full 8-minute storyline is described scene by scene below.
+
+| Scene | What happens | What it proves | Code / test |
+|---|---|---|---|
+| S0 | Registry with 1,247 agents; filtered query in ~10 ms | Inventory at enterprise scale (D1.1, M2) | `registry.py` |
+| S1 | Priya registers agents, Sanne approves; a user holding both roles cannot approve their own agent (SOD-001); identities get private_key_jwt keys; signed passport | Lifecycle, unique identity, SoD (M1, M4, M12) | `test_s1_…` |
+| S2 | Jan asks Ava to change his address. Ava gets a 5-minute Mandate for *customer.kyc.verify + customer.profile.update*, delegates to the KYC agent over A2A (purpose narrowed to *customer.kyc.verify*, nested `act` chain), KYC's result reaches Ava with BSN/IBAN/e-mail redacted, Ava updates the address and closes the task | JIT purpose-bound access, delegation chain, redaction, lineage, automatic revocation (M5, M7, M10, D2.3) | `test_s2_…` |
+| S3 | A €25,000 transfer to a new beneficiary is held (PAY-010). Sanne approves; re-using the approval for €45,000 is denied (APR-001); the original executes once | Human approval bound to the exact action (M6) | `test_s3_…`, `test_approval_is_single_use` |
+| S4 | A poisoned rental contract tells Ava to e-mail all records to an external address. The Guard flags the injection and taints the task; the e-mail is denied (IFC-001, lethal-trifecta breaker); DET-02 fires; the playbook suspends Ava and cascade-revokes the KYC agent's delegated mandate within the same request; no e-mail leaves | Prompt-injection controls, SOC alerting, immediate suspension and cascade revocation (M11, M13, M14) | `test_s4_…` |
+| S5 | A scraper with a static API key hits the CRM through the Gateway; an identity created directly in the IdP is found by an IdP scan; both become findings; one is quarantined, the other claimed into a draft registration | Shadow-agent discovery (M3, D1.3) | `test_a12_…` |
+| S8 | The ledger verifies; every decision carries reason codes and the policy version | Compliance-ready evidence (D5.3) | `test_every_decision_is_evidence` |
+
+Extra attack tests: A3 poisoned tool cannot be approved without override, A4 rug pull quarantines the tool,
+A6 unauthorised tools are hidden and uncallable, A7/A8 delegation cannot widen purpose or skip the registry,
+A10 audience misuse, A16 expired mandate, A17 agent cannot exceed the user it acts for, rate limiting,
+material change forces re-approval, leaver orphans agents.

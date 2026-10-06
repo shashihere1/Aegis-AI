@@ -91,7 +91,8 @@ SDK), the KYC and Payments agents (A2A) and Ava, with synthetic data only. Perso
  Agents ──MCP/A2A/LLM + Mandate──► Aegis Gateway (PEP) ──┴──► MCP servers · agents · Azure OpenAI
                     revocations / taint / rate limits: hot store (memory locally, Valkey in Azure)
 ```
-See `demo/aegis_demo/world.py` for the full wiring and `demo/aegis_demo/run.py` for the scene-by-scene flow.
+See `demo/aegis_demo/world.py` for the full wiring and [`docs/demo-flow.md`](docs/demo-flow.md) for the
+scene-by-scene flow.
 
 ## Local defaults vs. deployment (honest list)
 
@@ -116,8 +117,9 @@ See `demo/aegis_demo/world.py` for the full wiring and `demo/aegis_demo/run.py` 
 
 `tests/` covers the PII and injection detectors, every policy rule, the ledger's tamper detection, and
 end-to-end scenes S1–S4 plus attacks A3, A4, A6, A7, A10, A11, A12, A16, A17, rate limiting, material-change
-re-approval and leaver handling. Run `pytest -v` to reproduce the results, and `python -m aegis_demo.run` for a
-narrated run of the storyline.
+re-approval and leaver handling. Latest results: [`docs/test-evidence/pytest.txt`](docs/test-evidence/pytest.txt);
+narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.txt); console screenshots:
+[`docs/test-evidence/console/`](docs/test-evidence/console/).
 
 ## Responsible AI, security and limitations
 
@@ -128,9 +130,8 @@ deployment are not built yet; the demo's data lives in memory and resets when th
 
 ## Transparency: what was built when, and AI assistance
 
-Per the participant handbook, this increment was prepared in the permitted pre-event window **with AI coding
-assistance (Claude Code)** and must be reviewed by the team before it is relied on or demonstrated. A day-by-day
-log of what was built when is kept by the team internally. All data is synthetic; no client code, systems or
-data are used.
+Per the participant handbook, see [`docs/progress.md`](docs/progress.md). This increment was prepared in the
+permitted pre-event window **with AI coding assistance (Claude Code)** and must be reviewed by the team before
+it is relied on or demonstrated. All data is synthetic; no client code, systems or data are used.
 
 Third-party licences: [`LICENSES.md`](LICENSES.md).

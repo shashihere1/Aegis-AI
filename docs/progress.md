@@ -1,0 +1,23 @@
+# Progress and transparency ledger
+
+The participant handbook allows preparation before the event, provided the team is transparent about what was
+built before and during the Makeathon (handbook §1). This file is that record. Update it every day.
+
+| Date | Phase | What was built | How | Evidence |
+|---|---|---|---|---|
+| Mon 5 Oct 2026 | Prep window | **Increment 1 – governed-transaction core:** registry and lifecycle with SoD, dev IdP with private_key_jwt, STS (RFC 8693 Mandates, intersection rule, delegation attenuation, cascade revocation), PDP (Rego + in-process engine), Gateway (MCP / A2A / LLM proxies, pinning, redaction, taint, rate limits, approvals), Guard heuristics and PII recognizers, SOC detections and auto-suspend playbook, discovery, ledger, lineage, mock bank (7 MCP servers), demo agents, 40 tests, narrated demo | Generated with AI coding assistance (Claude Code); **requires team review** | `docs/test-evidence/pytest.txt`, `docs/test-evidence/demo-run.txt` |
+| Tue 6 Oct | Prep window | **Increment 2 – console:** React + TypeScript console (17 screens) in the prototype's look on the live API; persona switcher showing SoD; live activity, SOC dashboard with validated status colours, lineage graph, approvals inbox, access control, tools, policies, ledger; Demo Studio API that runs scenes from buttons (S3 completes by itself after human approval). Backend additions: agent names on decisions/alerts/mandates, `/v1/tasks`, `/v1/soc/summary`, `/v1/policies`, `/v1/guard/scan`, `/idp/personas`. 44 tests | Generated with AI coding assistance (Claude Code); **requires team review** | `docs/test-evidence/`, screenshots on request |
+| Wed 7 Oct | Prep window | *(planned)* team review of increments 1–2; LLM-driven planner for Ava on the approved Azure OpenAI deployment; OPA in CI | | |
+| Thu 8 Oct | Prep window | *(planned)* Keycloak adapter or confirmed dev-IdP decision; Azure sandbox deployment dry-run | | |
+| Fri 9 Oct | **Event day 1** | *(planned)* Azure deployment, LLM-driven planner on approved Azure OpenAI, P1 differentiators | | |
+| Sat 10 Oct | **Event day 2** | *(planned)* hardening, evidence, submission, rehearsal | | |
+
+## Review checklist for increment 1 (do before relying on it)
+- [ ] Each workstream owner reads and understands the modules in their area (handbook: every member must be able
+      to answer questions on their area).
+- [ ] Security-critical code reviewed line by line: `identity/sts.py`, `gateway/app.py`, `ledger.py`, SoD checks.
+- [ ] Run `pytest` and `python -m aegis_demo.run` on every team laptop.
+- [ ] Confirm with the mentor how much pre-built work is acceptable (plan §17.2, §22 Q9).
+- [ ] Export `docs/architecture.png` (handbook minimum structure) from the architecture diagram.
+- [x] Repository created in the official org: Infosys-STG-Makeathon-21_Zero_Trust_Architechture_PS1
+- [ ] Fill in team members and primary contact in the README.
