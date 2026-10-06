@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.env
+*.db
+*.pem
+*.key
+node_modules/
+web/dist/
+models/
+
+# Working docs kept locally only (not pushed to the shared repo).
+docs/

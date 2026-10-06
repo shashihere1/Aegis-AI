@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+/* Design tokens. Components use roles (bg-card, text-muted, ...) so light/dark swap in one place. */
+@theme {
+  --color-page: var(--page);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-inset: var(--inset);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-series: var(--series);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-serious: var(--serious);
+  --color-critical: var(--critical);
+  --color-good-ink: var(--good-ink);
+  --color-warning-ink: var(--warning-ink);
+  --color-serious-ink: var(--serious-ink);
+  --color-critical-ink: var(--critical-ink);
+  --color-info-ink: var(--info-ink);
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b0f14;
+  --panel: #0e131a;
+  --card: #121821;
+  --inset: #0f141b;
+  --hover: #1a2230;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --fg: #e7ecf2;
+  --muted: #9aa6b5;
+  --faint: #6b7686;
+  --accent: #22b867;
+  --accent-strong: #16a35a;
+  --accent-soft: rgba(34, 184, 103, 0.13);
+  --on-accent: #04140b;
+  --series: #3987e5;
+  /* status palette (fixed): good / warning / serious / critical */
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --good-ink: #5fd38a;
+  --warning-ink: #f8c95a;
+  --serious-ink: #f2a582;
+  --critical-ink: #f08080;
+  --info-ink: #8fb9f0;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --page: #f4f6f5;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --inset: #f6f8f7;
+  --hover: #eef2f0;
+  --line: rgba(11, 15, 20, 0.08);
+  --line-strong: rgba(11, 15, 20, 0.16);
+  --fg: #0e141b;
+  --muted: #4b5563;
+  --faint: #8a94a2;
+  --accent: #128a4c;
+  --accent-strong: #0f7a43;
+  --accent-soft: rgba(18, 138, 76, 0.1);
+  --on-accent: #ffffff;
+  --series: #2a78d6;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --good-ink: #0b6b2e;
+  --warning-ink: #8a5a00;
+  --serious-ink: #9a3f16;
+  --critical-ink: #b42323;
+  --info-ink: #1d5fae;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+@keyframes flash {
+  from {
+    background-color: var(--accent-soft);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.row-new {
+  animation: flash 2.4s ease-out;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.live-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* React Flow theming */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-label-background-color: var(--card);
+  --xy-edge-label-color: var(--muted);
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--hover);
+  --xy-controls-button-color: var(--fg);
+  --xy-controls-button-border-color: var(--line);
+}

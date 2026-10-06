@@ -1,0 +1,23 @@
+{
+  "customers": {
+    "C-1001": {
+      "name": "Jan de Vries",
+      "bsn": "366473785",
+      "iban": "NL53ABNA2883005961",
+      "email": "jan.devries@example.nl",
+      "phone": "+31 6 12345678",
+      "address": "Prinsengracht 263, 1016 GV Amsterdam",
+      "balance_eur": 48250.75
+    },
+    "C-1002": {
+      "name": "Sanne Visser",
+      "bsn": "333066972",
+      "iban": "NL96ABNA0587150211",
+      "email": "s.visser@example.nl",
+      "phone": "+31 6 23456789",
+      "address": "Oudegracht 120, 3511 AW Utrecht",
+      "balance_eur": 3120.1
+    }
+  },
+  "landlord_iban": "NL32INGB0728567220"
+}

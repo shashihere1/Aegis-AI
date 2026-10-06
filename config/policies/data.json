@@ -1,0 +1,9 @@
+{
+  "thresholds": {
+    "payments": {
+      "hitl_amount_eur": 10000
+    }
+  },
+  "redact_entities": ["BSN", "IBAN_CODE", "EMAIL_ADDRESS", "PHONE_NUMBER"],
+  "approval_side_effects_high_risk": ["financial", "destructive"]
+}

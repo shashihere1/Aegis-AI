@@ -1,0 +1,16 @@
+{
+  "_comment": "Intent taxonomy (plan Appendix B). The STS maps a free-text task intent to categories; agents may also pass categories explicitly.",
+  "categories": {
+    "customer.kyc.verify": ["verify", "verification", "identity", "id document", "passport", "kyc", "know your customer"],
+    "customer.profile.update": ["update address", "change address", "address change", "update my", "moved", "profile update"],
+    "customer.profile.read": ["customer profile", "customer details", "look up customer"],
+    "customer.inquiry.read": ["balance", "transactions", "statement", "inquiry", "question", "read document", "summarise document", "summarize document"],
+    "payments.transfer.initiate": ["transfer", "pay ", "payment to", "send money", "wire"],
+    "payments.status.read": ["payment status", "status of my payment", "track payment"],
+    "ops.incident.triage": ["incident", "health", "outage", "diagnose", "triage"],
+    "ops.infra.change": ["restart", "scale", "redeploy"],
+    "comms.customer.notify.internal": ["notify the customer", "in-app message", "app message"],
+    "comms.external.send": ["send email", "email to", "e-mail"],
+    "marketing.campaign.draft": ["campaign", "leads", "marketing"]
+  }
+}

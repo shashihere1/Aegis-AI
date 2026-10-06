@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aegis-ai"
+version = "0.1.0"
+description = "Aegis AI - governance and identity layer for autonomous AI agents (STG Makeathon #21, PS-1)"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+dependencies = [
+    "fastapi>=0.140",
+    "uvicorn>=0.50",
+    "pydantic>=2.13",
+    "httpx>=0.28",
+    "python-multipart>=0.0.20",
+    "pyjwt[crypto]>=2.15",
+    "cryptography>=45",
+    "sqlalchemy[asyncio]>=2.0.54",
+    "aiosqlite>=0.21",
+    "mcp>=1.28,<2",
+    "opentelemetry-api>=1.44",
+    "opentelemetry-sdk>=1.44",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.31"]
+valkey = ["redis>=6"]
+dev = ["pytest>=8", "pytest-asyncio>=1.0", "ruff>=0.16"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aegis", "demo/aegis_demo"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B008", "UP017"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["aegis", "aegis_demo"]
