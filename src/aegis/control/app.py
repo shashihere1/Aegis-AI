@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from aegis.common.crypto import SigningKey
 from aegis.common.settings import Settings
-from aegis.control import approvals, discovery, internal, registry, soc, tools_registry
+from aegis.control import approvals, discovery, evidence, internal, registry, soc, tools_registry
 from aegis.control.context import ControlContext, load_taxonomy
 from aegis.control.db import Database
 from aegis.control.identity import idp as idp_module
@@ -34,7 +34,7 @@ def create_app(settings: Settings, http: httpx.AsyncClient, hotstore: HotStore |
 
     app = FastAPI(title="Aegis AI control plane", version="0.1.0", lifespan=lifespan)
     app.state.ctx = context
-    for module in (idp_module, sts, registry, tools_registry, approvals, discovery, soc, internal):
+    for module in (idp_module, sts, registry, tools_registry, approvals, discovery, soc, evidence, internal):
         app.include_router(module.router())
 
     @app.get("/health")

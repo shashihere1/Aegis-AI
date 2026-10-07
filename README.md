@@ -31,10 +31,11 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Shadow-agent discovery (Gateway traffic + IdP scan), claim / quarantine | ✅ | `src/aegis/control/discovery.py` |
 | Re-attestation campaign, leaver → orphaned agents | ✅ (basic) | `registry.py` |
 | Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
+| Auditor-only demo evidence pack: HTML report, JSON records, SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
 | OpenTelemetry spans with GenAI + `aegis.*` attributes | ✅ (SDK spans; exporter by env) | gateway |
 | React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
-| Policy time-machine, evidence packs, Copilot, Azure deployment, Keycloak/Entra/OPA adapters | ⏳ next increments | — |
+| Policy time-machine, regulatory-grade evidence packs, Copilot, Azure deployment, Keycloak/Entra/OPA adapters | ⏳ next increments | — |
 
 ## The console
 
@@ -60,12 +61,20 @@ cd web
 npm install          # uses your npm config, which on Infosys laptops points at the Infy Artifactory mirror
 npm run build        # writes web/dist, which the demo server serves at /ui
 cd ..
-.venv\Scripts\python -m aegis_demo.serve            # then open http://127.0.0.1:8000/ui
-# UI development with hot reload: keep the server running, then in web/: npm run dev -> http://127.0.0.1:5173/ui
+.venv\Scripts\python -m aegis_demo.serve            # then open http://127.0.0.1:8000/ui/
+# UI development with hot reload: keep the server running, then in web/: npm run dev -> http://127.0.0.1:5173/ui/
 ```
 
 Suggested demo order: Demo Studio → S2 → open Agent Lineage → S3 → switch to Sanne and approve in Approvals (the
 payment then executes by itself) → S4 → SOC Dashboard and Alerts → Reset.
+
+For the evidence finale, switch to **Eva Visser (Auditor)**, open **Audit Ledger**, and download the evidence pack.
+Open `report.html` in the ZIP for the readable story. Extract `verify_pack.py` and run
+`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip"` to recompute its file hashes and ledger chain. The export is
+auditor-only and refuses to download if ledger verification fails. It contains synthetic demo records,
+including approval arguments and policy inputs, so treat the ZIP as confidential. Its manifest is not
+externally signed or timestamped, and the local role gate uses the passwordless dev IdP; this is **not**
+a certified regulatory report or production access control.
 
 ## Run it (Windows, Python 3.14; no Docker needed)
 
@@ -73,7 +82,7 @@ payment then executes by itself) → S4 → SOC Dashboard and Alerts → Reset.
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.lock      # through the Infy Artifactory mirror
 .venv\Scripts\python -m pip install --no-build-isolation --no-deps -e .
-.venv\Scripts\python -m pytest                                 # 44 tests (11 OPA-conformance tests need an opa binary)
+.venv\Scripts\python -m pytest                                 # 11 OPA-conformance tests need an opa binary
 .venv\Scripts\python -m aegis_demo.run                         # narrated demo of scenes S0-S5, S8
 .venv\Scripts\python -m aegis_demo.serve                       # console /ui, API docs /docs and /gw/docs (--port to change)
 ```
@@ -112,6 +121,8 @@ scene-by-scene flow.
 `POST /v1/tools/{id}/approve` · `GET|POST /v1/approvals…` · `GET /v1/alerts` · `GET /v1/decisions` ·
 `GET /v1/lineage/{root}` · `GET /v1/ledger/verify` · Gateway: `POST /gw/mcp/{server}`, `POST /gw/a2a/{agent}`,
 `POST /gw/llm/v1/chat/completions`, `GET /gw/.well-known/oauth-protected-resource/mcp/{server}` (RFC 9728).
+
+Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment).
 
 ## Tests and evidence
 

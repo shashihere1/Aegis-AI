@@ -45,5 +45,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Serve the Aegis demo (console at /ui, API docs at /docs).")
     parser.add_argument("--port", type=int, default=8000)
     port = parser.parse_args().port
-    print(f"Aegis console: http://127.0.0.1:{port}/ui   ·   API docs: http://127.0.0.1:{port}/docs")
+    print(f"Aegis console: http://127.0.0.1:{port}/ui/   ·   API docs: http://127.0.0.1:{port}/docs")
     uvicorn.run(DemoServer(), host="127.0.0.1", port=port, log_level="warning")

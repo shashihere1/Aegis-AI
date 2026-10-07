@@ -1,18 +1,45 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link2, RefreshCw, ShieldCheck, ShieldX } from "lucide-react";
-import { api } from "../lib/api";
+import { Download, Link2, RefreshCw, ShieldCheck, ShieldX } from "lucide-react";
+import { api, downloadFile } from "../lib/api";
 import { clock, shortHash } from "../lib/format";
-import type { LedgerEntry, LedgerVerify } from "../lib/types";
+import { useSession } from "../lib/session";
+import { useToast } from "../lib/toast";
+import type { EvidenceSummary, LedgerEntry, LedgerVerify } from "../lib/types";
 import { Button, Card, Chip, Drawer, JsonBlock, Loading, PageHeader, TextInput, Td, Th } from "../components/ui";
 
 export function Evidence() {
+  const { can } = useSession();
+  const toast = useToast();
+  const auditor = can("auditor");
   const verify = useQuery({ queryKey: ["ledger-verify"], queryFn: () => api<LedgerVerify>("/v1/ledger/verify"), refetchInterval: 5000 });
   const entries = useQuery({ queryKey: ["ledger"], queryFn: () => api<LedgerEntry[]>("/v1/ledger", { query: { limit: 300 } }), refetchInterval: 3000 });
+  const pack = useQuery({ queryKey: ["evidence-summary"], queryFn: () => api<EvidenceSummary>("/v1/evidence/summary"), enabled: auditor, refetchInterval: 5000 });
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<LedgerEntry | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const rows = (entries.data ?? []).filter((e) => !filter || `${e.event_type} ${e.actor} ${e.subject}`.toLowerCase().includes(filter.toLowerCase()));
   const v = verify.data;
+
+  async function downloadPack() {
+    setDownloading(true);
+    try {
+      const { blob, filename } = await downloadFile("/v1/evidence/pack");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast("success", "Evidence pack downloaded", "Open report.html in the ZIP; run verify_pack.py to check its hashes and audit chain.");
+    } catch (error) {
+      toast("error", "Evidence pack unavailable", error instanceof Error ? error.message : String(error));
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <>
@@ -28,6 +55,28 @@ export function Evidence() {
           </div>
           <Button icon={RefreshCw} loading={verify.isFetching} onClick={() => verify.refetch()}>
             Re-verify
+          </Button>
+        </div>
+      </Card>
+      <Card title="Auditor proof pack" className="mb-4">
+        <div className="flex flex-wrap items-center gap-5 p-5">
+          <div className="min-w-0 flex-1">
+            <div className="font-semibold">Download the evidence behind this demo</div>
+            <p className="mt-1 text-sm text-muted">
+              A readable HTML report, structured JSON records, a SHA-256 file manifest, and an offline audit-chain verifier.
+              The pack is synthetic demo evidence, not a certified regulatory report.
+            </p>
+            {auditor && pack.data && (
+              <p className="mt-2 text-xs text-faint">
+                {pack.data.counts.decisions} decisions · {pack.data.counts.approvals} approvals · {pack.data.counts.alerts} alerts · {pack.data.counts.ledger} ledger entries
+                {pack.data.integrity.ok ? " · chain verified" : " · chain verification failed"}
+              </p>
+            )}
+            {!auditor && <p className="mt-2 text-sm text-warning-ink">Switch to Eva Visser (Auditor) to export the pack.</p>}
+            {auditor && pack.isError && <p className="mt-2 text-sm text-critical-ink">Could not load pack preview: {pack.error.message}</p>}
+          </div>
+          <Button icon={Download} variant="primary" loading={downloading} disabled={!auditor || !pack.data?.integrity.ok || downloading} onClick={downloadPack}>
+            Download evidence pack
           </Button>
         </div>
       </Card>

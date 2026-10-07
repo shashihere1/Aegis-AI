@@ -43,8 +43,8 @@ async def append(session: AsyncSession, event_type: str, actor: str, subject: st
         return entry
 
 
-async def verify(session: AsyncSession) -> dict:
-    entries = (await session.execute(select(LedgerEntry).order_by(LedgerEntry.seq))).scalars().all()
+def verify_entries(entries: list[LedgerEntry]) -> dict:
+    """Verify exactly the entries that will be exported, not a second database read."""
     prev = GENESIS
     for e in entries:
         expected = entry_hash(prev, e.ts, e.event_type, e.actor, e.subject, e.payload)
@@ -52,3 +52,8 @@ async def verify(session: AsyncSession) -> dict:
             return {"ok": False, "entries": len(entries), "broken_at_seq": e.seq}
         prev = e.entry_hash
     return {"ok": True, "entries": len(entries), "tip": prev}
+
+
+async def verify(session: AsyncSession) -> dict:
+    entries = (await session.execute(select(LedgerEntry).order_by(LedgerEntry.seq))).scalars().all()
+    return verify_entries(entries)

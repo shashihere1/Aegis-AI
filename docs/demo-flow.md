@@ -1,6 +1,6 @@
 # Demo flow
 
-Run `python -m aegis_demo.run` for the narrated version of scenes S0–S5 and S8 (output:
+Run `python -m aegis_demo.run` for the narrated version of scenes S0–S5 and a ledger-only S8 (output:
 `docs/test-evidence/demo-run.txt`). The full 8-minute storyline is described scene by scene below.
 
 | Scene | What happens | What it proves | Code / test |
@@ -11,7 +11,14 @@ Run `python -m aegis_demo.run` for the narrated version of scenes S0–S5 and S8
 | S3 | A €25,000 transfer to a new beneficiary is held (PAY-010). Sanne approves; re-using the approval for €45,000 is denied (APR-001); the original executes once | Human approval bound to the exact action (M6) | `test_s3_…`, `test_approval_is_single_use` |
 | S4 | A poisoned rental contract tells Ava to e-mail all records to an external address. The Guard flags the injection and taints the task; the e-mail is denied (IFC-001, lethal-trifecta breaker); DET-02 fires; the playbook suspends Ava and cascade-revokes the KYC agent's delegated mandate within the same request; no e-mail leaves | Prompt-injection controls, SOC alerting, immediate suspension and cascade revocation (M11, M13, M14) | `test_s4_…` |
 | S5 | A scraper with a static API key hits the CRM through the Gateway; an identity created directly in the IdP is found by an IdP scan; both become findings; one is quarantined, the other claimed into a draft registration | Shadow-agent discovery (M3, D1.3) | `test_a12_…` |
-| S8 | The ledger verifies; every decision carries reason codes and the policy version | Compliance-ready evidence (D5.3) | `test_every_decision_is_evidence` |
+| S8 | Eva opens Audit Ledger, verifies the chain, downloads the auditor-only evidence pack, opens its HTML report and runs the offline verifier over the ZIP | Portable, tamper-evident demo records (not a certified regulatory report) | `tests/test_evidence.py`, `test_every_decision_is_evidence` |
+
+For S8 in the UI, first complete S2/S3/S4 so the pack contains approvals and alerts. Switch to **Eva Visser**
+using the persona selector, open **Audit Ledger**, and click **Download evidence pack**. The ZIP includes
+`report.html`, structured JSON, a SHA-256 manifest and `verify_pack.py`. After extracting the verifier, run
+`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip"`. The local demo database resets on server restart, so download
+the pack before stopping the server. The export is restricted to the Auditor role and fails closed if the
+ledger hash chain is broken.
 
 Extra attack tests: A3 poisoned tool cannot be approved without override, A4 rug pull quarantines the tool,
 A6 unauthorised tools are hidden and uncallable, A7/A8 delegation cannot widen purpose or skip the registry,

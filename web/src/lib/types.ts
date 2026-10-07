@@ -233,6 +233,13 @@ export interface LedgerVerify {
   broken_at_seq?: number;
 }
 
+export interface EvidenceSummary {
+  generated_at: string;
+  source: string;
+  integrity: LedgerVerify;
+  counts: Record<"agents" | "mandates" | "decisions" | "approvals" | "alerts" | "ledger", number>;
+}
+
 export interface Usage {
   agent_id: string;
   agent_name: string;

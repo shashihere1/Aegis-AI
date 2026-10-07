@@ -55,3 +55,24 @@ export async function api<T>(path: string, options: Options = {}, retried = fals
 }
 
 export const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body });
+
+/** Fetch an authenticated attachment without treating ZIP bytes as JSON. */
+export async function downloadFile(path: string, retried = false): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(path, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  if (response.status === 401 && !retried && relogin) {
+    token = await relogin();
+    return downloadFile(path, true);
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      message = detailMessage(JSON.parse(text), message);
+    } catch {
+      if (text) message = text;
+    }
+    throw new ApiError(response.status, message);
+  }
+  const filename = response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "aegis-evidence.zip";
+  return { blob: await response.blob(), filename };
+}

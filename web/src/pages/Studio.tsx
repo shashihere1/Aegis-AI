@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { AlertOctagon, Ban, CheckCircle2, Hourglass, Play, RotateCcw, Sparkles } from "lucide-react";
+import { AlertOctagon, Ban, CheckCircle2, FileArchive, Hourglass, Play, RotateCcw, Sparkles } from "lucide-react";
 import { useRuns, useStudioStatus } from "../lib/queries";
 import { SCENES, useResetDemo, useRunScene } from "../lib/scenes";
 import { clock } from "../lib/format";
@@ -86,6 +86,27 @@ export function Studio() {
               </div>
             </Card>
           ))}
+          <Card className="p-5">
+            <div className="flex items-start gap-4">
+              <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent">
+                <FileArchive className="size-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md bg-inset px-1.5 py-0.5 font-mono text-xs text-muted">S8</span>
+                  <h3 className="font-semibold">Prove it with an evidence pack</h3>
+                </div>
+                <p className="mt-1.5 text-sm text-muted">
+                  Switch to Eva Visser (Auditor), verify the ledger and download a portable report of this demo's
+                  agents, mandates, decisions, approvals and alerts.
+                </p>
+                <p className="mt-2 text-xs text-accent">Proves: audit trail · human oversight · offline verification</p>
+              </div>
+              <Link to="/evidence" className="rounded-lg border border-line-strong bg-inset px-4 py-2 text-sm font-medium hover:bg-hover">
+                Open audit →
+              </Link>
+            </div>
+          </Card>
         </div>
         <Card title="Run log" className="h-fit">
           {!runs.length ? (

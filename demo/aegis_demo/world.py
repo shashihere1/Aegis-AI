@@ -193,7 +193,8 @@ async def running_world(seed: int = 0, **overrides):
     kyc_app, payments_app = kyc_agent_app(), payments_agent_app()
     mounts = {name: Mount(f"/demo/mcp/{name}", app) for name, app in servers.items()}
     holder: dict = {}
-    ui = [Mount("/ui", SpaStaticFiles(directory=UI_DIST, html=True)),
+    ui = [Route("/ui", lambda request: RedirectResponse("/ui/")),
+          Mount("/ui", SpaStaticFiles(directory=UI_DIST, html=True)),
           Route("/", lambda request: RedirectResponse("/ui/"))] if UI_DIST.exists() else []
     composite = Starlette(routes=[
         Mount("/gw", gateway), *mounts.values(),
