@@ -38,6 +38,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const switchTo = useCallback(
     async (next: string) => {
+      await queryClient.cancelQueries();
+      queryClient.clear(); // Never display the previous persona's cached customer records.
       setToken(await login(next));
       setRelogin(() => login(next).then((t) => (setToken(t), t)));
       setUsername(next);
@@ -55,7 +57,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     api<Persona[]>("/idp/personas")
       .then((list) => {
-        const staff = list.filter((p) => !p.roles.includes("customer"));
+        const staff = list.filter((p) => !p.roles.includes("customer") || p.username === "jan.devries");
         setPersonas(staff);
         const initial = staff.find((p) => p.username === stored() && p.status === "active") ?? staff[0];
         return switchTo(initial.username);

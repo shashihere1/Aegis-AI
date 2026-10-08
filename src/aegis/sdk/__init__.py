@@ -1,3 +1,3 @@
-from aegis.sdk.client import AegisAgent, AegisDenied, ApprovalRequired, RateLimited, Task
+from aegis.sdk.client import AegisAgent, AegisDenied, ApprovalRequired, LlmCallError, RateLimited, Task
 
-__all__ = ["AegisAgent", "AegisDenied", "ApprovalRequired", "RateLimited", "Task"]
+__all__ = ["AegisAgent", "AegisDenied", "ApprovalRequired", "LlmCallError", "RateLimited", "Task"]

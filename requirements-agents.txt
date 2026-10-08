@@ -1,0 +1,10 @@
+# Optional agent runtimes for the NEXT implementation step; installing does not enable new workflows.
+# Install from the repository root through your approved Python package mirror:
+#   .\.venv\Scripts\python -m pip install -r requirements-agents.txt
+# Preserve existing application dependency pins. Report resolver conflicts; do not bypass with --no-deps.
+-c requirements.lock
+
+# Direct runtime versions checked against the maintainers' PyPI pages on 2026-10-09.
+# Transitive dependencies are resolved by pip; this is NOT a complete, verified transitive lockfile.
+langgraph==1.2.14
+agent-framework-core==1.21.0

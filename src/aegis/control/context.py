@@ -1,5 +1,6 @@
+import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ class ControlContext:
     http: httpx.AsyncClient
     taxonomy: dict[str, list[str]]
     telemetry: Any = None
+    llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
     def sts_issuer(self) -> str:

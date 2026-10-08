@@ -15,6 +15,7 @@ import {
   GitFork,
   KeyRound,
   LayoutGrid,
+  MessageSquare,
   MonitorDot,
   Moon,
   Plug,
@@ -84,12 +85,26 @@ function useNav(): { section: string; items: NavItem[] }[] {
       items: [
         { to: "/evidence", label: "Audit Ledger", icon: ShieldCheck },
         { to: "/studio", label: "Demo Studio", icon: Sparkles },
+        { to: "/assistant", label: "Bank Assistant", icon: MessageSquare },
       ],
     },
   ];
 }
 
 function Sidebar() {
+  const { can } = useSession();
+  return can("customer") ? <CustomerSidebar /> : <StaffSidebar />;
+}
+
+function CustomerSidebar() {
+  return <aside className="w-64 shrink-0 border-r border-line bg-panel p-5">
+    <div className="mb-6 font-semibold">Aegis · Synthetic bank</div>
+    <NavLink to="/assistant" className="text-accent">Bank Assistant</NavLink>
+    <p className="mt-4 text-xs text-muted">Customer view. Staff approvals and audit records use separate roles.</p>
+  </aside>;
+}
+
+function StaffSidebar() {
   const nav = useNav();
   const { persona } = useSession();
   return (
@@ -303,6 +318,7 @@ const TITLES: Record<string, string> = {
   policies: "Policy Governance",
   evidence: "Audit Ledger",
   studio: "Demo Studio",
+  assistant: "Bank Assistant",
 };
 
 function useTheme(): [string, () => void] {
@@ -325,11 +341,16 @@ function useTheme(): [string, () => void] {
 }
 
 export function Layout() {
+  const { can } = useSession();
+  const customer = can("customer");
   const location = useLocation();
   const navigate = useNavigate();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
   const section = location.pathname.split("/")[1] || "agents";
+  useEffect(() => {
+    if (customer && section !== "assistant") navigate("/assistant", { replace: true });
+  }, [customer, section, navigate]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -364,7 +385,7 @@ export function Layout() {
             <kbd className="rounded border border-line-strong px-1.5 text-xs">Ctrl K</kbd>
           </button>
           <PersonaSwitcher />
-          <Notifications />
+          {!customer && <Notifications />}
           <button onClick={toggleTheme} className="grid size-10 place-items-center rounded-xl text-muted hover:bg-hover hover:text-fg" aria-label="Toggle theme">
             {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
           </button>
@@ -375,8 +396,8 @@ export function Layout() {
           </div>
         </main>
       </div>
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
-      <StudioLauncher />
+      {!customer && <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />}
+      {!customer && <StudioLauncher />}
     </div>
   );
 }

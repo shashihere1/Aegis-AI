@@ -23,6 +23,7 @@ import { Tools } from "./pages/Tools";
 import { PoliciesPage } from "./pages/Policies";
 import { Evidence } from "./pages/Evidence";
 import { Studio } from "./pages/Studio";
+import { BankAssistant } from "./pages/BankAssistant";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 1000 } },
@@ -57,6 +58,7 @@ const router = createBrowserRouter(
         { path: "policies", element: <PoliciesPage /> },
         { path: "evidence", element: <Evidence /> },
         { path: "studio", element: <Studio /> },
+        { path: "assistant", element: <BankAssistant /> },
         { path: "*", element: <Navigate to="/agents" replace /> },
       ],
     },

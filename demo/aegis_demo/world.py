@@ -1,7 +1,8 @@
 """Runs the whole system in one process: control plane, Gateway, mock-bank MCP servers and demo agents.
 
 Services talk over HTTP exactly as in a deployment, but requests are routed in-process through one
-ASGI app, so no Docker, network or external IdP is needed. The same composite is served by
+ASGI app. The gateway has a separate client for explicitly configured Azure inference; local demo
+services do not gain arbitrary outbound access. No Docker or external IdP is needed. The composite is served by
 `python -m aegis_demo.serve` for the browser and API docs.
 """
 
@@ -32,7 +33,9 @@ from aegis.policy.engine import make_engine
 from aegis.sdk import AegisAgent
 from aegis.telemetry import TraceMiddleware, tracing_headers
 from aegis_demo import catalog
+from aegis_demo.agent_api import interrupt_history
 from aegis_demo.agents import Ava, kyc_agent_app, payments_agent_app
+from aegis_demo.data import DOCUMENTS
 from aegis_demo.fake_llm import fake_llm_app
 from aegis_demo.mcp_servers import SERVERS
 from aegis_demo.studio import studio_app
@@ -285,6 +288,14 @@ async def running_world(seed: int = 0, **overrides):
     values = dict(
         control_url=BASE, gateway_url=f"{BASE}/gw", database_url="sqlite+aiosqlite:///:memory:", cache_seconds=0
     )
+    # Trusted synthetic ownership directory, independent of any model-supplied identifiers.
+    if not overrides.get("resource_owners"):
+        overrides["resource_owners"] = {
+            "customer_id": {"C-1001": "user:jan.devries"},
+            "document_id": {
+                doc_id: "user:jan.devries" for doc_id, doc in DOCUMENTS.items() if doc["customer_id"] == "C-1001"
+            },
+        }
     settings = Settings(**(values | overrides))
     transport = InProcessTransport()
 
@@ -313,6 +324,8 @@ async def running_world(seed: int = 0, **overrides):
         app.add_middleware(TraceMiddleware, telemetry=control.state.ctx.telemetry, service=f"aegis.agent.{name}")
     mounts = {name: Mount(f"/demo/mcp/{name}", app) for name, app in servers.items()}
     holder: dict = {}
+    studio = studio_app(lambda: holder["world"])
+    studio.state.ctx = control.state.ctx
     ui = (
         [
             Route("/ui", lambda request: RedirectResponse("/ui/")),
@@ -329,7 +342,7 @@ async def running_world(seed: int = 0, **overrides):
             Mount("/demo/agents/kyc", kyc_app),
             Mount("/demo/agents/payments", payments_app),
             Mount("/demo/fake-llm", fake_llm_app()),
-            Mount("/demo/api", studio_app(lambda: holder["world"])),
+            Mount("/demo/api", studio),
             *ui,
             Mount("/", control),
         ]
@@ -337,12 +350,14 @@ async def running_world(seed: int = 0, **overrides):
     transport.app = composite
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(control.router.lifespan_context(control))
+        await stack.enter_async_context(gateway.router.lifespan_context(gateway))
         for app in servers.values():
             await stack.enter_async_context(app.router.lifespan_context(app))
         world = World(settings, http, control, gateway, mounts, stack, kyc_app, payments_app)
         world.composite = composite
         holder["world"] = world
         await bootstrap(world)
+        await interrupt_history(world)
         if seed:
             await seed_registry(world, seed)
         try:

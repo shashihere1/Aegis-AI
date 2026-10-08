@@ -1,7 +1,7 @@
 import re
 from collections.abc import AsyncIterator
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -24,6 +24,7 @@ class Database:
     async def create_all(self) -> None:
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await self._upgrade_decision_policy_version(conn)
             if self.engine.dialect.name == "postgresql":
                 # The ledger is append-only even if application code accidentally attempts a mutation.
                 await conn.execute(
@@ -47,6 +48,25 @@ class Database:
                     FOR EACH ROW EXECUTE FUNCTION aegis_ledger_immutable()
                 """)
                 )
+
+    @staticmethod
+    async def _upgrade_decision_policy_version(conn) -> None:
+        """Non-destructive, idempotent upgrade; create_all alone does not widen existing columns."""
+        if conn.dialect.name != "postgresql":
+            return
+        columns = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_columns("decisions"))
+        column = next(c for c in columns if c["name"] == "policy_version")
+        length = getattr(column["type"], "length", None)
+        if length is not None and length < 64:
+            await conn.execute(text("ALTER TABLE decisions ALTER COLUMN policy_version TYPE VARCHAR(64)"))
+
+    async def upgrade_schema(self) -> None:
+        """Apply the targeted compatibility upgrade without starting services or touching their state."""
+        async with self.engine.begin() as conn:
+            # Do not queue a long exclusive-lock wait behind requests in an already-running console.
+            if conn.dialect.name == "postgresql":
+                await conn.execute(text("SET LOCAL lock_timeout = '3s'"))
+            await self._upgrade_decision_policy_version(conn)
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessionmaker() as session:

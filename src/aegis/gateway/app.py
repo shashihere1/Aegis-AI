@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 
 import httpx
 import jwt
@@ -21,6 +22,7 @@ from opentelemetry import trace
 from aegis.common.hashing import action_hash, tool_definition_hash
 from aegis.common.settings import Settings
 from aegis.gateway.control_client import ControlPlaneClient
+from aegis.gateway.llm import AzureChatUpstream, LlmError, bounded_chat, completion_usage, safe_request_id
 from aegis.guard import pii
 from aegis.guard.detectors import scan_text
 from aegis.hotstore import HotStore
@@ -72,7 +74,18 @@ def create_gateway(
     settings: Settings, http: httpx.AsyncClient, hotstore: HotStore, engine: PolicyEngine, telemetry=None
 ) -> FastAPI:
     tracer = telemetry.tracer("aegis.gateway") if telemetry else trace.get_tracer("aegis.gateway")
-    app = FastAPI(title="Aegis Gateway (PEP)", version="0.1.0")
+    azure = AzureChatUpstream(settings) if settings.azure_openai_endpoint else None
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            if azure:
+                await azure.aclose()
+
+    app = FastAPI(title="Aegis Gateway (PEP)", version="0.1.0", lifespan=lifespan)
+    app.state.azure_upstream = azure
     cp = ControlPlaneClient(http, settings.control_url, settings.internal_token, settings.cache_seconds)
     gw = settings.gateway_url.rstrip("/")
     upstream_cache: dict[str, tuple[float, dict[str, str]]] = {}
@@ -277,6 +290,18 @@ def create_gateway(
                 approval_ctx = {"status": approval["status"], "id": approval_id}
 
         classification = rec.get("classification") or {}
+        if not isinstance(arguments, dict):
+            return rpc_error(rpc_id, DENIED, "Tool arguments must be an object.")
+        # Ownership is resolved from the signed user identity and a trusted directory, never model text.
+        for field, owners in settings.resource_owners.items():
+            if field in arguments and owners.get(str(arguments[field])) != claims["sub"]:
+                verdict = {
+                    "decision": "deny",
+                    "policy_version": "resource-ownership-v1",
+                    "reasons": [{"rule": "RESOURCE-OWNER", "message": "This resource is not owned by the user."}],
+                }
+                await record(claims, tool_id, verdict, snapshot={"resource_field": field}, started=started)
+                return rpc_error(rpc_id, DENIED, "Resource ownership denied.", {"reasons": verdict["reasons"]})
         policy_input = {
             "subject": {
                 "type": "agent",
@@ -462,13 +487,20 @@ def create_gateway(
     @app.post("/llm/v1/chat/completions")
     async def chat(request: Request):
         """OpenAI-compatible proxy to the OneStop-approved Azure OpenAI deployment; records tokens and cost."""
-        body = await request.json()
         try:
             claims = await authenticate(request, f"{gw}/llm")
         except AuthError as exc:
             return auth_failure(exc)
         if "llm.chat" not in claims["scope"].split():
             return JSONResponse({"error": "mandate does not allow LLM calls"}, status_code=403)
+        try:
+            body = bounded_chat(await request.json(), settings)
+        except ValueError:
+            return JSONResponse(
+                {"error": {"code": "invalid_json", "message": "Supply a valid JSON chat body."}}, status_code=400
+            )
+        except LlmError as exc:
+            return JSONResponse(exc.payload(), status_code=exc.status)
         prompt = "\n".join(str(m.get("content", "")) for m in body.get("messages", []))
         guard = scan_text(prompt)
         if guard.injection:
@@ -481,24 +513,103 @@ def create_gateway(
                     "findings": guard.findings,
                 }
             )
-        if settings.llm_upstream_url:
-            url, headers = f"{settings.llm_upstream_url.rstrip('/')}/chat/completions", {}
-        elif settings.azure_openai_endpoint:
-            url = (
-                f"{settings.azure_openai_endpoint.rstrip('/')}/openai/deployments/"
-                f"{settings.azure_openai_deployment}/chat/completions"
-                f"?api-version={settings.azure_openai_api_version}"
-            )
-            headers = {"api-key": settings.azure_openai_api_key}
-        else:
-            return JSONResponse({"error": "no approved LLM deployment configured"}, status_code=503)
+            # A detection can suspend/revoke this agent. Do not send a paid request on a now-revoked Mandate.
+            try:
+                claims = await authenticate(request, f"{gw}/llm")
+            except AuthError as exc:
+                return auth_failure(exc)
         started = time.perf_counter()
-        with tracer.start_as_current_span("chat") as span:
-            response = await http.post(url, json=body, headers=tracing_headers(headers), timeout=60.0)
+        reservation = None
+        if azure:
+            try:
+                azure.configuration()
+                reservation = await cp.reserve_llm(
+                    {
+                        "agent_id": claims["azp"],
+                        "mandate_id": claims["aegis"]["mandate_id"],
+                        "deployment": body.get("model") or settings.azure_openai_deployment,
+                        "data_class": claims["authorization_details"][0]["max_data_class"],
+                        # Conservative byte count + protocol overhead, not an Azure billing guarantee.
+                        "input_bound_tokens": len(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+                        + 1024 * len(body["messages"])
+                        + 256 * len(body.get("tools", [])),
+                        "output_bound_tokens": body.get("max_completion_tokens", body.get("max_tokens")),
+                    }
+                )
+                if not reservation["allowed"]:
+                    verdict = {
+                        "decision": "deny",
+                        "policy_version": reservation["policy_version"],
+                        "reasons": [{"rule": reservation["rule"], "message": reservation["message"]}],
+                    }
+                    await record(
+                        claims,
+                        "llm.chat",
+                        verdict,
+                        snapshot={"provider": "azure-openai", "model_policy": reservation["policy"]},
+                        started=started,
+                    )
+                    return JSONResponse(
+                        LlmError(403, reservation["rule"], reservation["message"]).payload(), status_code=403
+                    )
+            except LlmError as exc:
+                return JSONResponse(exc.payload(), status_code=exc.status)
+            except httpx.HTTPError:
+                return JSONResponse(
+                    LlmError(
+                        503, "model_controls_unavailable", "Cannot reserve model budget; no Azure request was sent."
+                    ).payload(),
+                    status_code=503,
+                )
+        with tracer.start_as_current_span("chat", record_exception=False) as span:
+            span.set_attribute("aegis.mandate.id", claims["aegis"]["mandate_id"])
+            try:
+                if azure:
+                    provider = "azure-openai"
+                    response = await azure.complete(body)
+                elif settings.llm_upstream_url:
+                    provider = "configured-upstream"
+                    url = f"{settings.llm_upstream_url.rstrip('/')}/chat/completions"
+                    response = await http.post(
+                        url, json=body, headers=tracing_headers(), timeout=settings.llm_timeout_seconds
+                    )
+                    if response.status_code != 200:
+                        raise LlmError(
+                            502, "llm_upstream_error", "The configured model returned an unsuccessful response."
+                        )
+                else:
+                    raise LlmError(503, "llm_not_configured", "No model deployment is configured.")
+                try:
+                    data = response.json()
+                except ValueError:
+                    raise LlmError(502, "invalid_llm_response", "The model returned a non-JSON response.") from None
+                tokens_in, tokens_out = completion_usage(data)
+            except httpx.TimeoutException:
+                return JSONResponse(
+                    LlmError(504, "llm_timeout", "The configured model timed out.").payload(), status_code=504
+                )
+            except httpx.RequestError:
+                return JSONResponse(
+                    LlmError(502, "llm_network", "Cannot reach the configured model.").payload(), status_code=502
+                )
+            except LlmError as exc:
+                span.set_status(trace.StatusCode.ERROR)
+                await record(
+                    claims,
+                    "llm.chat",
+                    {
+                        "decision": "error",
+                        "policy_version": reservation["policy_version"] if reservation else "",
+                        "reasons": [{"rule": exc.code, "message": str(exc)}],
+                    },
+                    snapshot={
+                        "provider": "azure-openai" if azure else "configured-upstream",
+                        "budget_hold_retained": bool(reservation),
+                    },
+                    started=started,
+                )
+                return JSONResponse(exc.payload(), status_code=exc.status)
             latency = (time.perf_counter() - started) * 1000
-            data = response.json()
-            usage = data.get("usage") or {}
-            tokens_in, tokens_out = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
             model = data.get("model") or body.get("model") or settings.azure_openai_deployment
             span.set_attributes(
                 {
@@ -510,18 +621,71 @@ def create_gateway(
                 }
             )
             cost = tokens_in / 1000 * settings.llm_price_in_per_1k + tokens_out / 1000 * settings.llm_price_out_per_1k
-            await cp.usage(
+            usage = {
+                "agent_id": claims["azp"],
+                "mandate_id": claims["aegis"]["mandate_id"],
+                "model": model,
+                "input_tokens": tokens_in,
+                "output_tokens": tokens_out,
+                "cost_eur": round(cost, 6),
+                "latency_ms": round(latency, 1),
+            }
+            if reservation:
+                try:
+                    settled = await cp.settle_llm(
+                        reservation["reservation_id"],
+                        {k: usage[k] for k in ("model", "input_tokens", "output_tokens", "latency_ms")},
+                    )
+                    if not settled.get("settled"):
+                        raise httpx.HTTPError("settlement unavailable")
+                    cost = settled["cost_eur"]
+                except httpx.HTTPError:
+                    return JSONResponse(
+                        LlmError(
+                            503,
+                            "model_accounting_unavailable",
+                            "Azure responded, but accounting failed. The budget hold remains; "
+                            "do not retry automatically.",
+                        ).payload(),
+                        status_code=503,
+                    )
+            else:
+                await cp.usage(usage)
+            await record(
+                claims,
+                "llm.chat",
                 {
-                    "agent_id": claims["azp"],
-                    "mandate_id": claims["aegis"]["mandate_id"],
+                    "decision": "allow",
+                    "policy_version": reservation["policy_version"] if reservation else "",
+                    "reasons": [
+                        {
+                            "rule": "LLM-MODEL-CONTROLS" if reservation else "LLM-SCOPE",
+                            "message": "Valid Mandate; bounded request; Python model controls applied."
+                            if reservation
+                            else "Valid Mandate with llm.chat scope; bounded model request.",
+                        }
+                    ],
+                },
+                snapshot={
+                    "kind": "llm_usage",
+                    "provider": provider,
                     "model": model,
                     "input_tokens": tokens_in,
                     "output_tokens": tokens_out,
-                    "cost_eur": round(cost, 6),
-                    "latency_ms": round(latency, 1),
-                }
+                },
+                started=started,
             )
-        return JSONResponse(data, status_code=response.status_code)
+        headers = {
+            "x-aegis-llm-provider": provider,
+            "x-aegis-llm-latency-ms": str(round(latency, 1)),
+            "x-aegis-llm-estimated-cost-eur": str(round(cost, 6)),
+        }
+        if azure:
+            headers["x-aegis-llm-deployment"] = settings.azure_openai_deployment
+            request_id = safe_request_id(response)
+            if request_id:
+                headers["x-aegis-azure-request-id"] = request_id
+        return JSONResponse(data, headers=headers)
 
     @app.get("/health")
     async def health():

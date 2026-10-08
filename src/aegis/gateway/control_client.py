@@ -69,3 +69,9 @@ class ControlPlaneClient:
 
     async def usage(self, payload: dict) -> None:
         await self._post("/internal/usage", payload)
+
+    async def reserve_llm(self, payload: dict) -> dict:
+        return await self._post("/internal/llm/reserve", payload)
+
+    async def settle_llm(self, reservation_id: str, payload: dict) -> dict:
+        return await self._post(f"/internal/llm/{reservation_id}/settle", payload)
