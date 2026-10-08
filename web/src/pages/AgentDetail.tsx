@@ -30,6 +30,10 @@ import {
 } from "../components/ui";
 
 const SIDE_EFFECT_TONE: Record<string, string> = { read: "text-muted", write: "text-info-ink", financial: "text-warning-ink", destructive: "text-critical-ink" };
+// Mirrors the weights in registry.py's inherent_risk(): each factor's share of the 0-100 score.
+const RISK_FACTOR_MAX: Record<string, number> = {
+  autonomy: 30, tool_criticality: 30, data_class: 20, exposure: 15, capability_breadth: 5, compounding: 15,
+};
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -202,12 +206,16 @@ export function AgentDetail() {
           </div>
         </Card>
 
-        <Card title={`Inherent risk · ${a.inherent_risk} / 40`}>
+        <Card title={`Inherent risk · ${a.inherent_risk} / 100`}>
           <div className="space-y-4 p-5">
             {Object.entries(breakdown).map(([k, v]) => (
-              <Meter key={k} label={titleCase(k)} value={v} max={10} />
+              <Meter key={k} label={titleCase(k)} value={v} max={RISK_FACTOR_MAX[k] ?? 30} />
             ))}
-            <p className="text-xs text-faint">Explainable score: autonomy + data class + tool criticality + exposure. It sets the approvers, Mandate lifetime and attestation frequency.</p>
+            <p className="text-xs text-faint">
+              Explainable score: weighted autonomy (30%) + tool criticality (30%) + data class (20%) + exposure
+              (15%) + capability breadth (5%), plus a compounding bonus when high autonomy meets a
+              financial/destructive tool. It sets the approvers, Mandate lifetime and attestation frequency.
+            </p>
           </div>
         </Card>
 
