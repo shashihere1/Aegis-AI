@@ -17,28 +17,41 @@ from aegis.control.identity import sts
 from aegis.control.identity.idp import Persona
 from aegis.control.tables import Agent, Alert, Tool
 
-AUTONOMY_SCORE = {"L0": 0, "L1": 3, "L2": 6, "L3": 10}
-DATA_SCORE = {"public": 0, "internal": 3, "confidential": 7, "restricted": 10}
-SIDE_EFFECT_SCORE = {"read": 0, "write": 4, "financial": 8, "destructive": 10}
+# Each factor is normalized to 0-100, then weighted, so the weights are a legible statement of what
+# matters most (tool criticality and autonomy dominate; capability breadth is a minor tiebreaker).
+AUTONOMY_SCORE = {"L0": 0, "L1": 30, "L2": 65, "L3": 100}
+DATA_SCORE = {"public": 0, "internal": 30, "confidential": 70, "restricted": 100}
+SIDE_EFFECT_SCORE = {"read": 0, "write": 35, "financial": 75, "destructive": 100}
+WEIGHTS = {"autonomy": 0.30, "tool_criticality": 0.30, "data_class": 0.20, "exposure": 0.15, "capability_breadth": 0.05}
+HIGH_AUTONOMY = {"L2", "L3"}
+HIGH_CRITICALITY = {"financial", "destructive"}
+COMPOUNDING_BONUS = 15  # an autonomous agent holding a financial/destructive tool is worse than the parts imply
 
 
 def risk_tier(score: int) -> str:
-    return "low" if score < 12 else "medium" if score < 24 else "high" if score < 32 else "critical"
+    return "low" if score < 30 else "medium" if score < 55 else "high" if score < 80 else "critical"
 
 
 async def inherent_risk(s: AsyncSession, agent: Agent) -> tuple[int, dict]:
-    """Explainable 0-40 score: autonomy + data class + tool criticality + exposure (plan §8.1)."""
+    """Explainable 0-100 score: weighted autonomy + tool criticality + data class + exposure + capability
+    breadth, plus a compounding bonus when high autonomy meets a financial/destructive tool (plan §8.1)."""
     tools = (await s.execute(select(Tool).where(Tool.id.in_(agent.capabilities or ["-"])))).scalars().all()
     side_effects = [(t.classification or {}).get("side_effect", "read") for t in tools]
     egress = [(t.classification or {}).get("egress", "none") for t in tools]
-    parts = {
-        "autonomy": AUTONOMY_SCORE.get(agent.autonomy, 10),
-        "data_class": DATA_SCORE.get(agent.max_data_class, 10),
-        "tool_criticality": max([SIDE_EFFECT_SCORE.get(x, 10) for x in side_effects], default=0),
-        "exposure": min(10, (5 if agent.customer_facing else 0) + (3 if agent.environment == "PRD" else 0)
-                        + (2 if "external" in egress else 0)),
+    worst_effect = max(side_effects, key=lambda x: SIDE_EFFECT_SCORE.get(x, 100), default="read")
+    factors = {
+        "autonomy": AUTONOMY_SCORE.get(agent.autonomy, 100),
+        "tool_criticality": SIDE_EFFECT_SCORE.get(worst_effect, 100),
+        "data_class": DATA_SCORE.get(agent.max_data_class, 100),
+        "exposure": min(100, (50 if agent.customer_facing else 0) + (30 if agent.environment == "PRD" else 0)
+                        + (20 if "external" in egress else 0)),
+        "capability_breadth": min(100, len(agent.capabilities or []) * 8),
     }
-    return sum(parts.values()), parts
+    parts = {k: round(v * WEIGHTS[k]) for k, v in factors.items()}
+    compounding = COMPOUNDING_BONUS if agent.autonomy in HIGH_AUTONOMY and worst_effect in HIGH_CRITICALITY else 0
+    if compounding:
+        parts["compounding"] = compounding
+    return min(100, sum(parts.values())), parts
 
 
 def to_dict(a: Agent) -> dict:
