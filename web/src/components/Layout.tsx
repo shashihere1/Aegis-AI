@@ -76,7 +76,7 @@ function useNav(): { section: string; items: NavItem[] }[] {
         { to: "/access", label: "Agent Access Control", icon: KeyRound },
         { to: "/approvals", label: "Approvals", icon: BadgeCheck, badge: approvals.length, tone: "warning" },
         { to: "/tools", label: "MCP Servers & Tools", icon: Plug },
-        { to: "/policies", label: "Policy Editor", icon: BookLock },
+        { to: "/policies", label: "Policy Governance", icon: BookLock },
       ],
     },
     {
@@ -300,7 +300,7 @@ const TITLES: Record<string, string> = {
   access: "Agent Access Control",
   approvals: "Approvals",
   tools: "MCP Servers & Tools",
-  policies: "Policy Editor",
+  policies: "Policy Governance",
   evidence: "Audit Ledger",
   studio: "Demo Studio",
 };

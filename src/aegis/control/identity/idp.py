@@ -6,7 +6,10 @@ authenticate with `private_key_jwt` client assertions (RFC 7523) - no shared sec
 DevIdp is for development and demos only; it has no passwords.
 """
 
-from dataclasses import dataclass, field
+import json
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 import jwt
@@ -49,14 +52,44 @@ class IdentityProvider(Protocol):
 
 
 class DevIdp:
-    def __init__(self, issuer: str, key: SigningKey):
+    def __init__(self, issuer: str, key: SigningKey, state_dir: str = ""):
         self.issuer = issuer
         self.key = key
         self.personas: dict[str, Persona] = {}
         self.clients: dict[str, Client] = {}
+        self.state_dir = Path(state_dir) if state_dir else None
+        if self.state_dir:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            for path in self.state_dir.glob("*.json"):
+                client = Client(**json.loads(path.read_text(encoding="utf-8")))
+                self.clients[client.client_id] = client
+
+    def _save_client(self, client: Client, private_pem: str | None = None) -> None:
+        self._check_client_id(client.client_id)
+        if self.state_dir:
+            (self.state_dir / f"{client.client_id}.json").write_text(json.dumps(asdict(client)), encoding="utf-8")
+            if private_pem:
+                (self.state_dir / f"{client.client_id}.pem").write_text(private_pem, encoding="utf-8")
+
+    def development_private_key(self, client_id: str) -> str:
+        self._check_client_id(client_id)
+        if not self.state_dir:
+            raise RuntimeError("Persistent development identity state is not configured")
+        return (self.state_dir / f"{client_id}.pem").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _check_client_id(client_id: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,159}", client_id):
+            raise ValueError("Invalid development client ID")
 
     # ---- humans ----
     def add_persona(self, persona: Persona) -> None:
+        if self.state_dir:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", persona.username):
+                raise ValueError("Invalid development persona name")
+            status_path = self.state_dir / "personas" / f"{persona.username}.json"
+            if status_path.exists():
+                persona.status = json.loads(status_path.read_text("utf-8"))["status"]
         self.personas[persona.username] = persona
 
     def login(self, username: str) -> str:
@@ -64,11 +97,20 @@ class DevIdp:
         if persona is None or persona.status != "active":
             raise PermissionError("unknown or inactive user")
         now = crypto.now()
-        return self.key.sign({
-            "iss": self.issuer, "sub": f"user:{persona.username}", "aud": CONSOLE_AUDIENCE,
-            "name": persona.name, "roles": persona.roles, "entitlements": persona.entitlements,
-            "typ": "user", "iat": now, "exp": now + 8 * 3600, "jti": crypto.new_jti("usr"),
-        })
+        return self.key.sign(
+            {
+                "iss": self.issuer,
+                "sub": f"user:{persona.username}",
+                "aud": CONSOLE_AUDIENCE,
+                "name": persona.name,
+                "roles": persona.roles,
+                "entitlements": persona.entitlements,
+                "typ": "user",
+                "iat": now,
+                "exp": now + 8 * 3600,
+                "jti": crypto.new_jti("usr"),
+            }
+        )
 
     def verify_user_token(self, token: str) -> Persona:
         claims = crypto.verify(token, self.key.public_pem, audience=CONSOLE_AUDIENCE, issuer=self.issuer)
@@ -82,6 +124,10 @@ class DevIdp:
     def mark_leaver(self, username: str) -> Persona:
         persona = self.personas[username]
         persona.status = "left"
+        if self.state_dir:
+            folder = self.state_dir / "personas"
+            folder.mkdir(exist_ok=True)
+            (folder / f"{username}.json").write_text(json.dumps({"status": persona.status}), encoding="utf-8")
         return persona
 
     # ---- agents ----
@@ -89,19 +135,26 @@ class DevIdp:
         """Create a confidential client for the agent. Returns (client_id, private key PEM) once."""
         private_pem = crypto.generate_private_key_pem()
         client_id = f"agent-{agent_id.lower()}"
-        self.clients[client_id] = Client(client_id, name, crypto.public_pem_from_private(private_pem),
-                                         agent_id=agent_id)
+        self.clients[client_id] = Client(
+            client_id, name, crypto.public_pem_from_private(private_pem), agent_id=agent_id
+        )
+        self._save_client(self.clients[client_id], private_pem)
         return client_id, private_pem
 
     def register_unmanaged_client(self, client_id: str, name: str) -> str:
         """An identity created directly in the IdP, bypassing Aegis (used to demo shadow discovery)."""
+        self._check_client_id(client_id)
+        if client_id in self.clients:
+            raise ValueError("Development client already exists")
         private_pem = crypto.generate_private_key_pem()
         self.clients[client_id] = Client(client_id, name, crypto.public_pem_from_private(private_pem))
+        self._save_client(self.clients[client_id], private_pem)
         return private_pem
 
     def set_enabled(self, client_id: str, enabled: bool) -> None:
         if client_id in self.clients:
             self.clients[client_id].enabled = enabled
+            self._save_client(self.clients[client_id])
 
     def list_clients(self) -> list[Client]:
         return list(self.clients.values())
@@ -111,15 +164,28 @@ class DevIdp:
         client = self.clients.get(client_id)
         if client is None or not client.enabled:
             raise PermissionError("unknown or disabled client")
-        claims = jwt.decode(assertion, client.public_pem, algorithms=[crypto.ALGORITHM],
-                            audience=f"{self.issuer}/token", options={"require": ["exp", "iat"]})
+        claims = jwt.decode(
+            assertion,
+            client.public_pem,
+            algorithms=[crypto.ALGORITHM],
+            audience=f"{self.issuer}/token",
+            options={"require": ["exp", "iat"]},
+        )
         if claims.get("sub") != client_id:
             raise PermissionError("assertion subject mismatch")
         now = crypto.now()
-        return self.key.sign({
-            "iss": self.issuer, "sub": client_id, "azp": client_id, "aud": STS_AUDIENCE, "typ": "agent",
-            "iat": now, "exp": now + 300, "jti": crypto.new_jti("idt"),
-        })
+        return self.key.sign(
+            {
+                "iss": self.issuer,
+                "sub": client_id,
+                "azp": client_id,
+                "aud": STS_AUDIENCE,
+                "typ": "agent",
+                "iat": now,
+                "exp": now + 300,
+                "jti": crypto.new_jti("idt"),
+            }
+        )
 
     def verify_agent_token(self, token: str) -> str:
         claims = crypto.verify(token, self.key.public_pem, audience=STS_AUDIENCE, issuer=self.issuer)
@@ -133,9 +199,16 @@ def client_assertion(client_id: str, private_pem: str, token_endpoint: str) -> s
     """Build a private_key_jwt client assertion (used by the SDK)."""
     now = crypto.now()
     return jwt.encode(
-        {"iss": client_id, "sub": client_id, "aud": token_endpoint, "iat": now, "exp": now + 60,
-         "jti": crypto.new_jti("ca")},
-        private_pem, algorithm=crypto.ALGORITHM,
+        {
+            "iss": client_id,
+            "sub": client_id,
+            "aud": token_endpoint,
+            "iat": now,
+            "exp": now + 60,
+            "jti": crypto.new_jti("ca"),
+        },
+        private_pem,
+        algorithm=crypto.ALGORITHM,
     )
 
 
@@ -147,8 +220,12 @@ def router() -> APIRouter:
     r = APIRouter(prefix="/idp", tags=["dev-idp"])
 
     @r.post("/token")
-    async def token(request: Request, grant_type: str = Form(...), client_assertion_type: str = Form(...),
-                    client_assertion: str = Form(...)):
+    async def token(
+        request: Request,
+        grant_type: str = Form(...),
+        client_assertion_type: str = Form(...),
+        client_assertion: str = Form(...),
+    ):
         if grant_type != "client_credentials" or client_assertion_type != ASSERTION_TYPE:
             raise HTTPException(400, {"error": "unsupported_grant_type"})
         try:
@@ -168,8 +245,10 @@ def router() -> APIRouter:
     @r.get("/personas")
     async def personas(request: Request):
         """Demo personas for the console's role switcher (dev IdP only)."""
-        return [{"username": p.username, "name": p.name, "roles": p.roles, "status": p.status}
-                for p in request.app.state.ctx.idp.personas.values()]
+        return [
+            {"username": p.username, "name": p.name, "roles": p.roles, "status": p.status}
+            for p in request.app.state.ctx.idp.personas.values()
+        ]
 
     @r.get("/jwks")
     async def jwks(request: Request):

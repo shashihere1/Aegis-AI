@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import Request
@@ -21,6 +22,7 @@ class ControlContext:
     hotstore: HotStore
     http: httpx.AsyncClient
     taxonomy: dict[str, list[str]]
+    telemetry: Any = None
 
     @property
     def sts_issuer(self) -> str:

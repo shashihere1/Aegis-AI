@@ -23,6 +23,7 @@ JAN = "jan.devries"
 SCENES = {
     "address-change": {"title": "Governed journey", "scene": "S2"},
     "transfer": {"title": "High-value transfer", "scene": "S3"},
+    "policy-transfer": {"title": "Policy threshold comparison: EUR 5,000", "scene": "S7"},
     "attack": {"title": "Prompt-injection attack", "scene": "S4"},
     "shadow": {"title": "Shadow agents", "scene": "S5"},
     "rug-pull": {"title": "Tool rug pull", "scene": "A4"},
@@ -41,15 +42,21 @@ def studio_app(get_world: Callable) -> FastAPI:
     counter = itertools.count(1)
 
     def new_run(key: str) -> dict:
-        run = {"id": uuid.uuid4().hex[:8], "key": key, **SCENES[key], "status": "running",
-               "started_at": datetime.now(UTC).isoformat(), "steps": [], "links": {}}
+        run = {
+            "id": uuid.uuid4().hex[:8],
+            "key": key,
+            **SCENES[key],
+            "status": "running",
+            "started_at": datetime.now(UTC).isoformat(),
+            "steps": [],
+            "links": {},
+        }
         runs.insert(0, run)
         del runs[30:]
         return run
 
     def step(run: dict, label: str, status: str = "ok", detail: str = "") -> None:
-        run["steps"].append({"label": label, "status": status, "detail": detail,
-                             "at": datetime.now(UTC).isoformat()})
+        run["steps"].append({"label": label, "status": status, "detail": detail, "at": datetime.now(UTC).isoformat()})
 
     def finish(run: dict, status: str) -> dict:
         run["status"] = status
@@ -67,9 +74,13 @@ def studio_app(get_world: Callable) -> FastAPI:
         w = get_world()
         agents = {key: {"id": agent_id, "status": await agent_status(w, key)} for key, agent_id in w.agent_ids.items()}
         tools = (await w.api("mark.jansen", "GET", "/v1/tools?server=kyc")).json()
-        return {"agents": agents, "kyc_variant": state["kyc_variant"],
-                "kyc_tool_status": {t["id"]: t["status"] for t in tools},
-                "emails_sent": len(mcp_servers.SENT_EMAILS), "transfers": mcp_servers.TRANSFERS[-5:]}
+        return {
+            "agents": agents,
+            "kyc_variant": state["kyc_variant"],
+            "kyc_tool_status": {t["id"]: t["status"] for t in tools},
+            "emails_sent": len(mcp_servers.SENT_EMAILS),
+            "transfers": mcp_servers.TRANSFERS[-5:],
+        }
 
     @app.get("/samples")
     async def samples():
@@ -85,18 +96,28 @@ def studio_app(get_world: Callable) -> FastAPI:
             return finish(run, "blocked")
         claims = result["task"].claims
         run["links"]["root_id"] = result["task"].root_id
-        step(run, "Mandate issued to Ava for Jan de Vries",
-             detail=f"purpose {', '.join(claims['authorization_details'][0]['intent_categories'])} · "
-                    f"expires in {claims['exp'] - claims['iat']} s")
+        step(
+            run,
+            "Mandate issued to Ava for Jan de Vries",
+            detail=f"purpose {', '.join(claims['authorization_details'][0]['intent_categories'])} · "
+            f"expires in {claims['exp'] - claims['iat']} s",
+        )
         verification = result["verification"]
         if verification["status"]["state"] != "completed":
-            step(run, "KYC agent could not verify the document", "denied",
-                 verification["artifacts"][0]["parts"][0]["data"].get("error", ""))
+            step(
+                run,
+                "KYC agent could not verify the document",
+                "denied",
+                verification["artifacts"][0]["parts"][0]["data"].get("error", ""),
+            )
             return finish(run, "blocked")
         kyc_claims = w.kyc_app.state.last_task.claims
-        step(run, "Delegated to KYC agent over A2A",
-             detail=f"purpose narrowed to {', '.join(kyc_claims['authorization_details'][0]['intent_categories'])}"
-                    f" · chain depth {kyc_claims['aegis']['depth']}")
+        step(
+            run,
+            "Delegated to KYC agent over A2A",
+            detail=f"purpose narrowed to {', '.join(kyc_claims['authorization_details'][0]['intent_categories'])}"
+            f" · chain depth {kyc_claims['aegis']['depth']}",
+        )
         data = verification["artifacts"][0]["parts"][0]["data"]
         step(run, "KYC result returned with PII redacted", detail=f"bsn={data.get('bsn')} · iban={data.get('iban')}")
         step(run, "Address updated in CRM", detail=f"new address: {structured(result['update']).get('address', '')}")
@@ -121,7 +142,14 @@ def studio_app(get_world: Callable) -> FastAPI:
 
     @app.post("/scenarios/transfer")
     async def transfer(body: TransferRequest):
-        w, run = get_world(), new_run("transfer")
+        return await transfer_flow(body, "transfer")
+
+    @app.post("/scenarios/policy-transfer")
+    async def policy_transfer():
+        return await transfer_flow(TransferRequest(amount=5000), "policy-transfer")
+
+    async def transfer_flow(body: TransferRequest, scene: str):
+        w, run = get_world(), new_run(scene)
         try:
             flow = await w.ava.transfer(w.token(JAN), "C-1001", body.amount, LANDLORD_IBAN, body.new_beneficiary)
         except AegisDenied as exc:
@@ -133,8 +161,12 @@ def studio_app(get_world: Callable) -> FastAPI:
         data = response["artifacts"][0]["parts"][0]["data"]
         if response["status"]["state"] == "auth-required":
             run["links"]["approval_id"] = data["approval_id"]
-            step(run, "Held for human approval", "waiting",
-                 "; ".join(f"{r['rule']}: {r['message']}" for r in data["reasons"]) + " · approve it in Approvals")
+            step(
+                run,
+                "Held for human approval",
+                "waiting",
+                "; ".join(f"{r['rule']}: {r['message']}" for r in data["reasons"]) + " · approve it in Approvals",
+            )
             run["status"] = "waiting"
             w.spawn(await_approval(run, flow, data["approval_id"]))
             return run
@@ -156,19 +188,30 @@ def studio_app(get_world: Callable) -> FastAPI:
             return finish(run, "blocked")
         run["links"]["root_id"] = result["task"].root_id
         step(run, "Ava delegated passport verification to the KYC agent")
-        step(run, "Ava read the customer's uploaded rental contract",
-             detail="it hides an instruction to e-mail all customer records to an outside address")
+        step(
+            run,
+            "Ava read the customer's uploaded rental contract",
+            detail="it hides an instruction to e-mail all customer records to an outside address",
+        )
         email = next((s for s in result["steps"] if s["step"] == "send_email"), None)
         if email and not email["ok"]:
-            step(run, "Hijacked e-mail to the attacker blocked", "denied", ", ".join(email["denied"]) +
-                 " · untrusted content + confidential data + external egress")
+            step(
+                run,
+                "Hijacked e-mail to the attacker blocked",
+                "denied",
+                ", ".join(email["denied"]) + " · untrusted content + confidential data + external egress",
+            )
         new_alerts = [a for a in (await w.api("mark.jansen", "GET", "/v1/alerts")).json() if a["id"] not in before]
         for alert in sorted(new_alerts, key=lambda a: a["rule_id"]):
             step(run, f"{alert['rule_id']} alert: {alert['title']}", "alert", alert["severity"])
             for action in alert["actions_taken"]:
                 radius = action["blast_radius"]
-                step(run, "Playbook suspended Ava and cascade-revoked her tasks", "denied",
-                     f"{len(radius['mandates'])} mandates across {len(radius['agents_affected'])} agents")
+                step(
+                    run,
+                    "Playbook suspended Ava and cascade-revoked her tasks",
+                    "denied",
+                    f"{len(radius['mandates'])} mandates across {len(radius['agents_affected'])} agents",
+                )
         run["links"]["alert_ids"] = [a["id"] for a in new_alerts]
         try:
             await w.kyc_app.state.last_task.call_tool("kyc", "get_kyc_status", {"customer_id": "C-1001"})
@@ -182,13 +225,24 @@ def studio_app(get_world: Callable) -> FastAPI:
     async def shadow():
         w, run = get_world(), new_run("shadow")
         n = next(counter)
-        call = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "get_customer", "arguments": {"customer_id": "C-1001"}}}
-        response = await w.http.post(f"{w.settings.gateway_url}/mcp/crm", json=call, headers={
-            "x-api-key": f"static-key-from-wiki-{n}", "user-agent": f"marketing-lead-scraper/0.{n}"})
-        step(run, "Unregistered script called the CRM through the Gateway with a static API key",
-             "denied", f"HTTP {response.status_code}: a Mandate is required")
-        client = f"lead-enrichment-bot-{n}"
+        call = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "get_customer", "arguments": {"customer_id": "C-1001"}},
+        }
+        response = await w.http.post(
+            f"{w.settings.gateway_url}/mcp/crm",
+            json=call,
+            headers={"x-api-key": f"static-key-from-wiki-{n}", "user-agent": f"marketing-lead-scraper/0.{n}"},
+        )
+        step(
+            run,
+            "Unregistered script called the CRM through the Gateway with a static API key",
+            "denied",
+            f"HTTP {response.status_code}: a Mandate is required",
+        )
+        client = f"lead-enrichment-bot-{n}-{uuid.uuid4().hex[:8]}"
         w.ctx.idp.register_unmanaged_client(client, "Lead enrichment bot")
         step(run, f"An identity '{client}' was created directly in the IdP, bypassing Aegis")
         found = (await w.api("mark.jansen", "POST", "/v1/discovery/scan")).json()["found"]
@@ -207,13 +261,21 @@ def studio_app(get_world: Callable) -> FastAPI:
             result = await w.ava.change_address(w.token(JAN), "C-1001", "D-77", "Keizersgracht 401, Amsterdam")
             run["links"]["root_id"] = result["task"].root_id
             state_ = result["verification"]["status"]["state"]
-            step(run, "KYC agent tried to call the changed tool",
-                 "denied" if state_ != "completed" else "ok", f"result: {state_}")
+            step(
+                run,
+                "KYC agent tried to call the changed tool",
+                "denied" if state_ != "completed" else "ok",
+                f"result: {state_}",
+            )
         except AegisDenied as exc:
             step(run, "Ava could not start the task", "denied", str(exc))
         tools = {t["id"]: t for t in (await w.api("mark.jansen", "GET", "/v1/tools?server=kyc")).json()}
-        step(run, f"kyc.verify_document is {tools['kyc.verify_document']['status']} (definition hash mismatch)",
-             "alert", "DET-03 raised")
+        step(
+            run,
+            f"kyc.verify_document is {tools['kyc.verify_document']['status']} (definition hash mismatch)",
+            "alert",
+            "DET-03 raised",
+        )
         return finish(run, "contained")
 
     @app.post("/reset")

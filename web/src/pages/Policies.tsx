@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Ban, BookLock, EyeOff, Hourglass } from "lucide-react";
 import { api } from "../lib/api";
 import type { Policies } from "../lib/types";
+import { PolicyGovernance } from "../components/PolicyGovernance";
 import { Card, Chip, JsonBlock, Loading, PageHeader, Pill, Tabs, Td, Th } from "../components/ui";
 
 const EFFECT = {
@@ -12,7 +13,7 @@ const EFFECT = {
 };
 
 export function PoliciesPage() {
-  const policies = useQuery({ queryKey: ["policies"], queryFn: () => api<Policies>("/v1/policies") });
+  const policies = useQuery({ queryKey: ["policies"], queryFn: () => api<Policies>("/v1/policies"), refetchInterval: 5000 });
   const [file, setFile] = useState("tool_call.rego");
   if (!policies.data) return <Loading />;
   const p = policies.data;
@@ -22,10 +23,11 @@ export function PoliciesPage() {
     <>
       <PageHeader
         icon={BookLock}
-        title="Policy Editor"
-        subtitle="Policy-as-code (Rego v1). Every decision records the version it was made under."
+        title="Policy Governance"
+        subtitle="Versioned configuration, independent approval, historical replay and rollback."
         actions={<Chip mono>{p.version}</Chip>}
       />
+      <PolicyGovernance policy={p} />
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr_1.15fr]">
         <div className="space-y-5">
           <Card title={`Rules · ${p.rules.length}`}>
@@ -68,12 +70,12 @@ export function PoliciesPage() {
             <div className="p-5">
               <JsonBlock value={p.data} />
               <p className="mt-3 text-xs text-faint">
-                Combination: deny › needs approval › allow (with obligations). Default deny. Locally the same rules run in-process; in Azure an OPA sidecar evaluates this exact bundle.
+                Combination: deny, needs approval, then allow with obligations. Default deny. The current local runtime is the Python evaluator; Rego is displayed as reference source, not executed here.
               </p>
             </div>
           </Card>
         </div>
-        <Card title="Source" action={<Tabs value={file} onChange={setFile} tabs={Object.keys(p.files).map((f) => ({ value: f, label: f }))} />}>
+        <Card title="Checked-in reference source (read-only)" action={<Tabs value={file} onChange={setFile} tabs={Object.keys(p.files).map((f) => ({ value: f, label: f }))} />}>
           <pre className="max-h-[calc(100vh-15rem)] overflow-auto p-5 font-mono text-xs leading-relaxed">
             {source.split("\n").map((line, i) => (
               <div key={i} className="flex">

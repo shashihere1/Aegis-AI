@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -183,3 +183,66 @@ class LedgerEntry(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     prev_hash: Mapped[str] = mapped_column(String(64))
     entry_hash: Mapped[str] = mapped_column(String(64))
+
+
+class PolicyVersion(Base):
+    __tablename__ = "policy_versions"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    configuration: Mapped[dict] = mapped_column(JSON)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    rules_hash: Mapped[str] = mapped_column(String(64))
+    author: Mapped[str] = mapped_column(String(120))
+    approver: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    justification: Mapped[str] = mapped_column(Text, default="")
+    simulation: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PolicyState(Base):
+    __tablename__ = "policy_state"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    active_version: Mapped[str] = mapped_column(String(40))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AlertCase(Base):
+    __tablename__ = "alert_cases"
+    alert_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    assigned_to: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CaseEvent(Base):
+    __tablename__ = "case_events"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    alert_id: Mapped[str] = mapped_column(String(40), index=True)
+    actor: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(30))
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentRisk(Base):
+    __tablename__ = "agent_risk"
+    agent_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    score: Mapped[int] = mapped_column(Integer)
+    tier: Mapped[str] = mapped_column(String(10))
+    breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    baseline: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TraceSpan(Base):
+    __tablename__ = "trace_spans"
+    span_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(32), index=True)
+    parent_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    name: Mapped[str] = mapped_column(String(200))
+    service: Mapped[str] = mapped_column(String(80))
+    start_ns: Mapped[int] = mapped_column(BigInteger)
+    end_ns: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(16))
+    attributes: Mapped[dict] = mapped_column(JSON, default=dict)

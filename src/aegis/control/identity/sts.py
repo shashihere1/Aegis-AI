@@ -27,6 +27,7 @@ from aegis.control import ledger
 from aegis.control.auth import require_roles
 from aegis.control.context import ControlContext, ctx, session
 from aegis.control.tables import Agent, Approval, DecisionRecord, Mandate, Tool
+from aegis.hotstore import MemoryHotStore
 
 TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 JWT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt"
@@ -84,8 +85,7 @@ async def delegation_targets(s: AsyncSession, agent: Agent, categories: list[str
         await s.execute(select(Agent).where(Agent.id.in_(agent.can_delegate_to), Agent.status == AgentStatus.ACTIVE))
     ).scalars()
     return sorted(
-        f"a2a:{t.id}" for t in targets
-        if agent.id in t.can_receive_from and set(t.intent_categories) & set(categories)
+        f"a2a:{t.id}" for t in targets if agent.id in t.can_receive_from and set(t.intent_categories) & set(categories)
     )
 
 
@@ -132,8 +132,7 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
         if parent.status != "active" or parent.expires_at.replace(tzinfo=UTC) <= now:
             raise StsError("invalid_grant", "parent mandate is no longer active", "REV-001")
         revoked = await c.hotstore.revoked(
-            [("mdt", parent.id), ("root", parent.root_id), ("jti", parent.jti)]
-            + [("agent", a) for a in parent.chain]
+            [("mdt", parent.id), ("root", parent.root_id), ("jti", parent.jti)] + [("agent", a) for a in parent.chain]
         )
         if revoked:
             raise StsError("invalid_grant", revoked, "REV-001")
@@ -166,8 +165,9 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
         categories = list(asked_categories)
         outside = set(categories) - set(agent.intent_categories)
         if outside:
-            raise StsError("invalid_scope", f"intent is outside the agent's registered purpose: {sorted(outside)}",
-                           "PUR-001")
+            raise StsError(
+                "invalid_scope", f"intent is outside the agent's registered purpose: {sorted(outside)}", "PUR-001"
+            )
         subject = f"user:{persona.username}" if persona else f"agent:{agent.id}"
         entitlements = list(persona.entitlements) if persona else []
         max_data = agent.max_data_class
@@ -178,8 +178,11 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
         depth_limit = min(c.settings.max_delegation_depth, agent.max_depth)
 
     if not categories:
-        raise StsError("invalid_scope", "the intent could not be mapped to this agent's purpose; "
-                                        "pass intent_categories explicitly", "PUR-001")
+        raise StsError(
+            "invalid_scope",
+            "the intent could not be mapped to this agent's purpose; pass intent_categories explicitly",
+            "PUR-001",
+        )
 
     tools = await eligible_tools(s, agent, categories, entitlements, requested_tools)
     targets = await delegation_targets(s, agent, categories) if depth + 1 <= depth_limit else []
@@ -195,30 +198,70 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
     mandate_id = new_id("mdt")
     jti = crypto.new_jti()
     mandate = Mandate(
-        id=mandate_id, parent_id=parent.id if parent else None, root_id=root_id or mandate_id, agent_id=agent.id,
-        subject=subject, chain=chain, intent=intent, intent_categories=categories, scopes=scopes,
-        audience=audience_for(c.settings.gateway_url, scopes), entitlements=entitlements, max_data_class=max_data,
-        depth=depth, jti=jti, issued_at=now, expires_at=expires,
+        id=mandate_id,
+        parent_id=parent.id if parent else None,
+        root_id=root_id or mandate_id,
+        agent_id=agent.id,
+        subject=subject,
+        chain=chain,
+        intent=intent,
+        intent_categories=categories,
+        scopes=scopes,
+        audience=audience_for(c.settings.gateway_url, scopes),
+        entitlements=entitlements,
+        max_data_class=max_data,
+        depth=depth,
+        jti=jti,
+        issued_at=now,
+        expires_at=expires,
     )
     s.add(mandate)
     agent.last_active_at = now
     claims = {
-        "iss": c.sts_issuer, "sub": subject, "aud": mandate.audience, "azp": agent.id, "act": act,
-        "iat": int(now.timestamp()), "nbf": int(now.timestamp()), "exp": int(expires.timestamp()), "jti": jti,
+        "iss": c.sts_issuer,
+        "sub": subject,
+        "aud": mandate.audience,
+        "azp": agent.id,
+        "act": act,
+        "iat": int(now.timestamp()),
+        "nbf": int(now.timestamp()),
+        "exp": int(expires.timestamp()),
+        "jti": jti,
         "scope": " ".join(scopes),
-        "authorization_details": [{
-            "type": "aegis_mandate", "intent": intent, "intent_categories": categories,
-            "resources": details.get("resources", {}), "max_data_class": max_data,
-        }],
+        "authorization_details": [
+            {
+                "type": "aegis_mandate",
+                "intent": intent,
+                "intent_categories": categories,
+                "resources": details.get("resources", {}),
+                "max_data_class": max_data,
+            }
+        ],
         "aegis": {
-            "mandate_id": mandate_id, "root_id": mandate.root_id, "parent_id": mandate.parent_id,
-            "depth": depth, "chain": chain, "ent": entitlements, "env": agent.environment,
+            "mandate_id": mandate_id,
+            "root_id": mandate.root_id,
+            "parent_id": mandate.parent_id,
+            "depth": depth,
+            "chain": chain,
+            "ent": entitlements,
+            "env": agent.environment,
             "risk_tier": agent.risk_tier,
         },
     }
-    await ledger.append(s, "mandate.issued", f"agent:{agent.id}", mandate_id,
-                        {"subject": subject, "chain": chain, "intent": intent, "scopes": scopes,
-                         "parent": mandate.parent_id, "expires_at": expires.isoformat()})
+    await ledger.append(
+        s,
+        "mandate.issued",
+        f"agent:{agent.id}",
+        mandate_id,
+        {
+            "subject": subject,
+            "chain": chain,
+            "intent": intent,
+            "scopes": scopes,
+            "parent": mandate.parent_id,
+            "expires_at": expires.isoformat(),
+        },
+    )
     await s.commit()
     return {
         "access_token": c.sts_key.sign(claims),
@@ -232,14 +275,16 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
 
 # ---- revocation --------------------------------------------------------------
 
+
 async def descendants(s: AsyncSession, mandate_ids: list[str]) -> list[Mandate]:
     tree = select(Mandate.id).where(Mandate.id.in_(mandate_ids)).cte("tree", recursive=True)
     tree = tree.union_all(select(Mandate.id).join(tree, Mandate.parent_id == tree.c.id))
     return list((await s.execute(select(Mandate).where(Mandate.id.in_(select(tree.c.id))))).scalars())
 
 
-async def revoke_tree(c: ControlContext, s: AsyncSession, mandate_ids: list[str], reason: str, actor: str,
-                      status: str = "revoked") -> list[str]:
+async def revoke_tree(
+    c: ControlContext, s: AsyncSession, mandate_ids: list[str], reason: str, actor: str, status: str = "revoked"
+) -> list[str]:
     revoked = []
     for m in await descendants(s, mandate_ids):
         if m.status == "active":
@@ -248,8 +293,9 @@ async def revoke_tree(c: ControlContext, s: AsyncSession, mandate_ids: list[str]
         await c.hotstore.revoke("mdt", m.id, reason)
         await c.hotstore.revoke("jti", m.jti, reason)
     if revoked:
-        await ledger.append(s, f"mandate.{status}", actor, ",".join(revoked[:20]),
-                            {"count": len(revoked), "reason": reason})
+        await ledger.append(
+            s, f"mandate.{status}", actor, ",".join(revoked[:20]), {"count": len(revoked), "reason": reason}
+        )
     return revoked
 
 
@@ -259,8 +305,12 @@ async def blast_radius(s: AsyncSession, agent_id: str) -> dict:
     tree = [m for m in await descendants(s, direct) if m.status == "active"] if direct else []
     tree_ids = [m.id for m in tree]
     approvals = (
-        await s.execute(select(Approval).where(Approval.mandate_id.in_(tree_ids), Approval.status == "pending"))
-    ).scalars().all() if tree_ids else []
+        (await s.execute(select(Approval).where(Approval.mandate_id.in_(tree_ids), Approval.status == "pending")))
+        .scalars()
+        .all()
+        if tree_ids
+        else []
+    )
     return {
         "agent_id": agent_id,
         "mandates": tree_ids,
@@ -290,6 +340,25 @@ async def rehydrate_revocations(c: ControlContext) -> None:
     """Re-load durable revocations into the hot store at start-up."""
     async with c.db.sessionmaker() as s:
         now = datetime.now(UTC)
+        if isinstance(c.hotstore, MemoryHotStore):
+            # Persistent signing keys must not keep tasks alive after volatile taint/rate state
+            # and agent approval-resume state have been lost. Keep their records, revoke access.
+            active = (await s.scalars(select(Mandate).where(Mandate.status == "active"))).all()
+            pending = (await s.scalars(select(Approval).where(Approval.status == "pending"))).all()
+            if active or pending:
+                reason = "Local service restarted; volatile task security state was lost"
+                for m in active:
+                    m.status, m.revoked_reason = "revoked", reason
+                for approval in pending:
+                    approval.status = "cancelled"
+                await ledger.append(
+                    s,
+                    "session.restart_revocation",
+                    "system:startup",
+                    "local-security-state",
+                    {"mandates": [m.id for m in active], "approvals": [a.id for a in pending], "reason": reason},
+                )
+                await s.commit()
         for m in (await s.execute(select(Mandate).where(Mandate.status != "active"))).scalars():
             if m.expires_at.replace(tzinfo=UTC) > now:
                 await c.hotstore.revoke("mdt", m.id, m.revoked_reason or m.status)
@@ -299,6 +368,7 @@ async def rehydrate_revocations(c: ControlContext) -> None:
 
 
 # ---- HTTP ----------------------------------------------------------------------
+
 
 def router() -> APIRouter:
     r = APIRouter(tags=["sts"])
@@ -316,21 +386,31 @@ def router() -> APIRouter:
         s: AsyncSession = Depends(session),
     ):
         c = request.app.state.ctx
-        form = {"grant_type": grant_type, "actor_token": actor_token, "subject_token": subject_token,
-                "authorization_details": authorization_details, "requested_ttl": requested_ttl}
+        form = {
+            "grant_type": grant_type,
+            "actor_token": actor_token,
+            "subject_token": subject_token,
+            "authorization_details": authorization_details,
+            "requested_ttl": requested_ttl,
+        }
         try:
             return await exchange(c, s, form)
         except StsError as exc:
             await s.rollback()
-            s.add(DecisionRecord(
-                id=new_id("dec"), action="sts.token_exchange", decision="deny",
-                reasons=[{"rule": exc.rule or exc.error, "message": exc.description}],
-                input_snapshot={"authorization_details": authorization_details},
-            ))
+            s.add(
+                DecisionRecord(
+                    id=new_id("dec"),
+                    action="sts.token_exchange",
+                    decision="deny",
+                    reasons=[{"rule": exc.rule or exc.error, "message": exc.description}],
+                    input_snapshot={"authorization_details": authorization_details},
+                )
+            )
             await ledger.append(s, "mandate.denied", "sts", exc.rule or exc.error, {"reason": exc.description})
             await s.commit()
-            return JSONResponse({"error": exc.error, "error_description": exc.description, "rule": exc.rule},
-                                status_code=400)
+            return JSONResponse(
+                {"error": exc.error, "error_description": exc.description, "rule": exc.rule}, status_code=400
+            )
 
     @r.get("/.well-known/jwks.json")
     async def jwks(c: ControlContext = Depends(ctx)):
@@ -355,31 +435,57 @@ def router() -> APIRouter:
             claims = crypto.verify(token, c.sts_key.public_pem, issuer=c.sts_issuer)
         except jwt.InvalidTokenError as exc:
             raise HTTPException(401, str(exc)) from exc
-        done = await revoke_tree(c, s, [claims["aegis"]["mandate_id"]], "task completed", claims["azp"],
-                                 status="completed")
+        done = await revoke_tree(
+            c, s, [claims["aegis"]["mandate_id"]], "task completed", claims["azp"], status="completed"
+        )
         await s.commit()
         return {"completed": done}
 
-    @r.get("/v1/mandates", dependencies=[Depends(require_roles("soc-analyst", "risk-approver", "auditor",
-                                                                   "admin"))])
+    @r.get("/v1/mandates", dependencies=[Depends(require_roles("soc-analyst", "risk-approver", "auditor", "admin"))])
     async def list_mandates(status: str = "active", s: AsyncSession = Depends(session)):
-        rows = (await s.execute(select(Mandate).where(Mandate.status == status).order_by(Mandate.issued_at.desc())
-                                .limit(200))).scalars().all()
-        names = dict((await s.execute(select(Agent.id, Agent.name).where(
-            Agent.id.in_({a for m in rows for a in m.chain})))).all())
+        rows = (
+            (
+                await s.execute(
+                    select(Mandate).where(Mandate.status == status).order_by(Mandate.issued_at.desc()).limit(200)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        names = dict(
+            (
+                await s.execute(select(Agent.id, Agent.name).where(Agent.id.in_({a for m in rows for a in m.chain})))
+            ).all()
+        )
         return [
-            {"id": m.id, "root_id": m.root_id, "parent_id": m.parent_id, "agent_id": m.agent_id,
-             "agent_name": names.get(m.agent_id), "subject": m.subject, "chain": m.chain,
-             "chain_names": [names.get(a, a) for a in m.chain], "intent": m.intent,
-             "intent_categories": m.intent_categories, "scopes": m.scopes, "depth": m.depth,
-             "issued_at": m.issued_at, "expires_at": m.expires_at, "status": m.status,
-             "revoked_reason": m.revoked_reason}
+            {
+                "id": m.id,
+                "root_id": m.root_id,
+                "parent_id": m.parent_id,
+                "agent_id": m.agent_id,
+                "agent_name": names.get(m.agent_id),
+                "subject": m.subject,
+                "chain": m.chain,
+                "chain_names": [names.get(a, a) for a in m.chain],
+                "intent": m.intent,
+                "intent_categories": m.intent_categories,
+                "scopes": m.scopes,
+                "depth": m.depth,
+                "issued_at": m.issued_at,
+                "expires_at": m.expires_at,
+                "status": m.status,
+                "revoked_reason": m.revoked_reason,
+            }
             for m in rows
         ]
 
     @r.post("/v1/mandates/{mandate_id}/revoke")
-    async def revoke(mandate_id: str, request: Request, s: AsyncSession = Depends(session),
-                     user=Depends(require_roles("soc-analyst", "risk-approver"))):
+    async def revoke(
+        mandate_id: str,
+        request: Request,
+        s: AsyncSession = Depends(session),
+        user=Depends(require_roles("soc-analyst", "risk-approver")),
+    ):
         c = request.app.state.ctx
         done = await revoke_tree(c, s, [mandate_id], f"revoked by {user.username}", f"user:{user.username}")
         await s.commit()

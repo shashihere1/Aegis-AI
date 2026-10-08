@@ -5,6 +5,8 @@ import time
 import httpx
 import jwt
 
+from aegis.telemetry import tracing_headers
+
 
 class ControlPlaneClient:
     def __init__(self, http: httpx.AsyncClient, control_url: str, internal_token: str, cache_seconds: float):
@@ -19,7 +21,7 @@ class ControlPlaneClient:
         hit = self._cache.get(path)
         if cache and hit and time.monotonic() - hit[0] < self.cache_seconds:
             return hit[1]
-        response = await self.http.get(f"{self.base}{path}", headers=self.headers)
+        response = await self.http.get(f"{self.base}{path}", headers=tracing_headers(self.headers))
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -28,14 +30,14 @@ class ControlPlaneClient:
         return value
 
     async def _post(self, path: str, payload: dict) -> dict:
-        response = await self.http.post(f"{self.base}{path}", headers=self.headers, json=payload)
+        response = await self.http.post(f"{self.base}{path}", headers=tracing_headers(self.headers), json=payload)
         response.raise_for_status()
         return response.json()
 
     async def sts_public_key(self):
         """STS verification key from the public JWKS (keys are fetched once and kept)."""
         if self._sts_key is None:
-            jwks = (await self.http.get(f"{self.base}/.well-known/jwks.json")).json()
+            jwks = (await self.http.get(f"{self.base}/.well-known/jwks.json", headers=tracing_headers())).json()
             self._sts_key = jwt.PyJWK(jwks["keys"][0]).key
         return self._sts_key
 

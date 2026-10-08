@@ -22,9 +22,11 @@ def generate_private_key_pem() -> str:
 
 def public_pem_from_private(private_pem: str) -> str:
     key = serialization.load_pem_private_key(private_pem.encode(), password=None)
-    return key.public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode()
+    return (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
 
 
 class SigningKey:
@@ -39,7 +41,12 @@ class SigningKey:
     def load_or_generate(cls, path: str, kid: str) -> SigningKey:
         if path and Path(path).exists():
             return cls(Path(path).read_text(), kid)
-        return cls(generate_private_key_pem(), kid)
+        private = generate_private_key_pem()
+        if path:
+            target = Path(path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(private, encoding="utf-8")
+        return cls(private, kid)
 
     def sign(self, claims: dict[str, Any]) -> str:
         return jwt.encode(claims, self.private_pem, algorithm=ALGORITHM, headers={"kid": self.kid})
@@ -52,9 +59,7 @@ class SigningKey:
 
 def verify(token: str, public_pem: str, audience: str | None = None, issuer: str | None = None) -> dict:
     options = {"require": ["exp", "iat"], "verify_aud": audience is not None}
-    return jwt.decode(
-        token, public_pem, algorithms=[ALGORITHM], audience=audience, issuer=issuer, options=options
-    )
+    return jwt.decode(token, public_pem, algorithms=[ALGORITHM], audience=audience, issuer=issuer, options=options)
 
 
 def unverified_header(token: str) -> dict:

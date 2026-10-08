@@ -9,6 +9,7 @@ import { personLabel, timeAgo } from "../lib/format";
 import type { Decision, Lineage, LineageNode, Task } from "../lib/types";
 import { Card, Chip, DECISIONS, EmptyState, Loading, PageHeader, Pill, StatusPill, cx } from "../components/ui";
 import { DecisionTable } from "./Activity";
+import { TraceWaterfall } from "../components/TraceWaterfall";
 
 const KIND: Record<LineageNode["kind"], { icon: LucideIcon; ring: string; caption: string }> = {
   user: { icon: User, ring: "border-series/50", caption: "Initiating user" },
@@ -158,6 +159,7 @@ export function LineagePage() {
             <Card title="Decisions in this task" action={task && <Link to={`/agents/${task.agent_id}`} className="text-sm text-accent hover:underline">{task.agent_name} →</Link>}>
               <div className="overflow-x-auto">{decisions.data ? <DecisionTable rows={decisions.data} /> : <Loading />}</div>
             </Card>
+            {selected && <TraceWaterfall rootId={selected} />}
           </div>
         </div>
       )}

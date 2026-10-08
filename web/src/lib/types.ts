@@ -273,6 +273,7 @@ export interface SocSummary {
 }
 
 export interface Policies {
+  engine: string;
   version: string;
   files: Record<string, string>;
   rules: { rule: string; effect: string; message: string }[];

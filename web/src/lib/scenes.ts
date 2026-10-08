@@ -17,6 +17,12 @@ export interface Scene {
 
 export const SCENES: Scene[] = [
   {
+    key: "policy-transfer", code: "S7", title: "EUR 5,000 policy threshold comparison", icon: Landmark,
+    story: "Run the same transfer before and after an approved policy change. At a EUR 10,000 threshold it is allowed; at EUR 2,000 it requires human approval, provided the agent has no other risk-based restrictions.",
+    proves: "Live policy activation · same action, different policy version · rollback",
+    next: "Priya drafts and replays a EUR 2,000 threshold in Policy Governance; Fatima approves and activates it. Run this scene again, then roll back.",
+  },
+  {
     key: "address-change",
     code: "S2",
     title: "Governed customer journey",

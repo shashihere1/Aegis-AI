@@ -28,9 +28,11 @@ class PolicyEngine(Protocol):
 
 
 class PythonEngine:
-    def __init__(self, policy_dir: str):
-        self.data = json.loads((Path(policy_dir) / "data.json").read_text(encoding="utf-8"))
-        self.version = policy_version(policy_dir)
+    def __init__(self, policy_dir: str, data: dict | None = None, version: str | None = None):
+        self.data = (
+            data if data is not None else json.loads((Path(policy_dir) / "data.json").read_text(encoding="utf-8"))
+        )
+        self.version = version or policy_version(policy_dir)
 
     async def evaluate(self, policy_input: dict) -> dict:
         return self.decide(policy_input)
@@ -53,8 +55,9 @@ class PythonEngine:
         if sprops.get("risk_tier") == "critical":
             deny.append({"rule": "RSK-001", "message": "Agent risk tier is critical"})
         if not (props.get("status") == "approved" and props.get("pinned") is True):
-            deny.append({"rule": "TOOL-001",
-                         "message": "Tool is not approved, or its definition changed since approval"})
+            deny.append(
+                {"rule": "TOOL-001", "message": "Tool is not approved, or its definition changed since approval"}
+            )
         if tool not in mandate.get("scopes", []):
             deny.append({"rule": "SCP-001", "message": f"Tool {tool} is not in this mandate's scope"})
         if not set(props.get("intent_tags", [])) & set(mandate.get("intent_categories", [])):
@@ -71,8 +74,13 @@ class PythonEngine:
             and session.get("tainted") is True
             and data_class_rank(session.get("max_data_class_read", "public")) >= 2
         ):
-            deny.append({"rule": "IFC-001", "message": "External egress blocked: this task ingested untrusted "
-                                                       "content and read confidential data"})
+            deny.append(
+                {
+                    "rule": "IFC-001",
+                    "message": "External egress blocked: this task ingested untrusted "
+                    "content and read confidential data",
+                }
+            )
         if approval.get("status") == "mismatch":
             deny.append({"rule": "APR-001", "message": "Approval does not match this exact action"})
 
@@ -83,8 +91,12 @@ class PythonEngine:
             and args.get("new_beneficiary") is True
             and not approved
         ):
-            needs.append({"rule": "PAY-010",
-                          "message": "Transfers above the threshold to a new beneficiary require human approval"})
+            needs.append(
+                {
+                    "rule": "PAY-010",
+                    "message": "Transfers above the threshold to a new beneficiary require human approval",
+                }
+            )
         if props.get("side_effect") == "destructive" and sprops.get("env") == "PRD" and not approved:
             needs.append({"rule": "DES-001", "message": "Destructive actions in production require human approval"})
         if (
@@ -92,8 +104,9 @@ class PythonEngine:
             and props.get("side_effect") in self.data["approval_side_effects_high_risk"]
             and not approved
         ):
-            needs.append({"rule": "RSK-002",
-                          "message": "High-risk agents need approval for financial or destructive actions"})
+            needs.append(
+                {"rule": "RSK-002", "message": "High-risk agents need approval for financial or destructive actions"}
+            )
 
         obligations: list[dict] = []
         if data_class_rank(props.get("returns_data_class", "public")) >= 2 and "pii.unmasked" not in mandate.get(

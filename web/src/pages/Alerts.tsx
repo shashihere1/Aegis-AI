@@ -1,13 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ban, TriangleAlert } from "lucide-react";
-import { api } from "../lib/api";
 import { useAlerts } from "../lib/queries";
-import { useToast } from "../lib/toast";
+import { Investigation } from "../components/Investigation";
 import { clock, timeAgo, titleCase } from "../lib/format";
 import type { Alert } from "../lib/types";
-import { Button, Card, Drawer, EmptyState, JsonBlock, Loading, PageHeader, Select, SeverityPill, StatusPill, Td, Th } from "../components/ui";
+import { Card, Drawer, EmptyState, JsonBlock, Loading, PageHeader, Select, SeverityPill, StatusPill, Td, Th } from "../components/ui";
 
 const DETECTIONS: Record<string, string> = {
   "DET-01": "Prompt injection detected in tool output",
@@ -16,25 +14,17 @@ const DETECTIONS: Record<string, string> = {
   "DET-04": "Burst of denied actions",
   "DET-05": "Revoked or expired mandate presented",
   "DET-07": "Unregistered agent activity",
+  "DET-08": "Call-rate deviation from the observed baseline",
+  "DET-09": "First-time tool use relative to recorded history",
   "DET-12": "Orphaned agent (owner left)",
+  "DET-13": "Adaptive risk reached the critical tier",
 };
 
 export function Alerts() {
   const alerts = useAlerts();
-  const toast = useToast();
-  const queryClient = useQueryClient();
   const [severity, setSeverity] = useState("");
   const [status, setStatus] = useState("");
   const [open, setOpen] = useState<Alert | null>(null);
-  const update = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => api(`/v1/alerts/${id}`, { method: "PATCH", body: { status } }),
-    onSuccess: (_r, v) => {
-      toast("success", `Alert marked ${titleCase(v.status)}`);
-      queryClient.invalidateQueries({ queryKey: ["alerts"] });
-      setOpen((a) => (a ? { ...a, status: v.status } : a));
-    },
-    onError: (e: Error) => toast("error", "Update refused", e.message),
-  });
   const rows = (alerts.data ?? []).filter((a) => (!severity || a.severity === severity) && (!status || a.status === status));
 
   return (
@@ -115,16 +105,7 @@ export function Alerts() {
                 </div>
               </div>
             ))}
-            <div>
-              <div className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">Triage</div>
-              <div className="flex flex-wrap gap-2">
-                {["triage", "investigating", "resolved", "false_positive"].map((st) => (
-                  <Button key={st} roles={["soc-analyst"]} disabled={open.status === st} onClick={() => update.mutate({ id: open.id, status: st })}>
-                    {titleCase(st)}
-                  </Button>
-                ))}
-              </div>
-            </div>
+            <Investigation key={open.id} alertId={open.id} onUpdate={status => setOpen(a => a ? { ...a, status } : a)} />
             {typeof open.evidence.mandate === "string" && (
               <Link to={`/access`} className="text-sm text-accent hover:underline">
                 Mandate {String(open.evidence.mandate)}

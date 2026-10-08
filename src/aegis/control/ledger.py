@@ -3,7 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common.hashing import sha256_hex
@@ -23,24 +23,31 @@ def entry_hash(prev_hash: str, ts: str, event_type: str, actor: str, subject: st
 
 async def append(session: AsyncSession, event_type: str, actor: str, subject: str, payload: dict) -> LedgerEntry:
     """Add an entry to the session; the caller commits it together with the change it records."""
+    if session.bind.dialect.name == "postgresql":
+        # A transaction can append twice before committing. Waiting on its database lock while
+        # holding a process lock would prevent the first transaction from making that second append.
+        await session.execute(text("SELECT pg_advisory_xact_lock(724356912)"))
+        return await _append_entry(session, event_type, actor, subject, payload)
     async with _append_lock:
-        last = (
-            await session.execute(select(LedgerEntry).order_by(LedgerEntry.seq.desc()).limit(1))
-        ).scalar_one_or_none()
-        prev = last.entry_hash if last else GENESIS
-        ts = datetime.now(UTC).isoformat()
-        entry = LedgerEntry(
-            ts=ts,
-            event_type=event_type,
-            actor=actor,
-            subject=subject,
-            payload=payload,
-            prev_hash=prev,
-            entry_hash=entry_hash(prev, ts, event_type, actor, subject, payload),
-        )
-        session.add(entry)
-        await session.flush()
-        return entry
+        return await _append_entry(session, event_type, actor, subject, payload)
+
+
+async def _append_entry(session, event_type, actor, subject, payload):
+    last = (await session.execute(select(LedgerEntry).order_by(LedgerEntry.seq.desc()).limit(1))).scalar_one_or_none()
+    prev = last.entry_hash if last else GENESIS
+    ts = datetime.now(UTC).isoformat()
+    entry = LedgerEntry(
+        ts=ts,
+        event_type=event_type,
+        actor=actor,
+        subject=subject,
+        payload=payload,
+        prev_hash=prev,
+        entry_hash=entry_hash(prev, ts, event_type, actor, subject, payload),
+    )
+    session.add(entry)
+    await session.flush()
+    return entry
 
 
 def verify_entries(entries: list[LedgerEntry]) -> dict:

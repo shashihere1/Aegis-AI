@@ -1,9 +1,10 @@
 """Runtime configuration, read from environment variables (see .env.example)."""
 
+import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -13,9 +14,12 @@ class Settings(BaseModel):
     control_url: str = "http://control.aegis"
     gateway_url: str = "http://gateway.aegis"
 
-    database_url: str = "sqlite+aiosqlite:///./aegis.db"
+    database_url: str = Field(default="sqlite+aiosqlite:///./aegis.db", repr=False)
+    database_schema: str = ""  # optional isolated PostgreSQL namespace (also used by integration tests)
     # PEM file for the STS signing key. Empty -> an ephemeral key is generated at start-up (dev only).
     signing_key_path: str = ""
+    idp_key_path: str = ""
+    identity_state_dir: str = ""  # local development identities; never a production secret store
 
     policy_engine: str = "python"  # "python" (in-process) or "opa" (OPA sidecar REST API)
     opa_url: str = "http://localhost:8181"
@@ -30,7 +34,7 @@ class Settings(BaseModel):
     auto_suspend_on_critical: bool = True
 
     # Shared secret for gateway -> control-plane internal calls (Key Vault reference in Azure).
-    internal_token: str = "dev-internal-token"
+    internal_token: str = Field(default="dev-internal-token", repr=False)
 
     # Gateway caches (seconds). 0 disables caching, which tests use for determinism.
     cache_seconds: float = 2.0
@@ -43,13 +47,16 @@ class Settings(BaseModel):
 
     # OneStop-approved Azure OpenAI deployment used by the LLM proxy.
     azure_openai_endpoint: str = ""
-    azure_openai_api_key: str = ""
+    azure_openai_api_key: str = Field(default="", repr=False)
     azure_openai_deployment: str = ""
     azure_openai_api_version: str = "2024-10-21"
 
     @classmethod
     def from_env(cls) -> Settings:
         values = {}
+        local = REPO_ROOT / ".local" / "connection.json"
+        if local.exists():
+            values.update(json.loads(local.read_text(encoding="utf-8-sig")))
         for name in cls.model_fields:
             env = os.environ.get(f"AEGIS_{name.upper()}")
             if env is not None:

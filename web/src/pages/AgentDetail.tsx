@@ -5,6 +5,7 @@ import { Ban, Bot, CheckCircle2, ClipboardCheck, FileSignature, KeyRound, PlayCi
 import { api, post } from "../lib/api";
 import { useSession } from "../lib/session";
 import { useToast } from "../lib/toast";
+import { AdaptiveRisk } from "../components/AdaptiveRisk";
 import { clock, timeAgo, titleCase } from "../lib/format";
 import type { Agent, BlastRadius, Decision, LedgerEntry, Tool } from "../lib/types";
 import {
@@ -210,6 +211,7 @@ export function AgentDetail() {
           </div>
         </Card>
 
+        <AdaptiveRisk agentId={id} />
         <Card title={`Capabilities · ${a.capabilities.length} tools`} className="xl:col-span-2">
           {a.capabilities.length === 0 ? (
             <EmptyState title="No tools" />

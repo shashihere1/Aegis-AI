@@ -12,7 +12,7 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 *allow / deny / require approval / redact / rate-limit*, and every decision is written to a
 **hash-chained evidence ledger**.
 
-## What works today (increment 1: the governed-transaction core)
+## What works today
 
 | Capability (PS-1) | Status | Where |
 |---|---|---|
@@ -33,9 +33,13 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
 | Auditor-only demo evidence pack: HTML report, JSON records, SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
-| OpenTelemetry spans with GenAI + `aegis.*` attributes | ✅ (SDK spans; exporter by env) | gateway |
+| Versioned policy configuration: draft, replay, separate approval, activation and rollback | ✅ (Python PDP configuration) | `src/aegis/control/policies.py` |
+| Policy-only time machine over recorded inputs; never executes tools or payments | ✅ (compatible evaluator versions) | `policies.py` |
+| Shared OpenTelemetry trace across SDK, gateway, delegated agents and MCP; PostgreSQL exporter and UI waterfall | ✅ (local exporter, not cloud OTLP) | `src/aegis/telemetry.py` |
+| SOC case assignments, notes, evidence links, validated statuses and append-only history | ✅ | `src/aegis/control/investigations.py` |
+| Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
 | React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
-| Policy time-machine, regulatory-grade evidence packs, Copilot, Azure deployment, Keycloak/Entra/OPA adapters | ⏳ next increments | — |
+| Regulatory-grade evidence packs, Copilot, Azure deployment, Keycloak/Entra adapters and managed OPA policy publishing | ⏳ remaining | — |
 
 ## The console
 
@@ -46,10 +50,10 @@ A React + TypeScript console in the look of the Fabric Vibe Studio prototype, on
 | Agent Registry / agent detail | 1,247 agents with filters and CSV export; Passport, explained risk score, capabilities, delegation rules, lifecycle trail, kill switch with blast-radius preview |
 | Shadow Agents · Re-attestation | Findings from Gateway traffic and IdP scans (claim / quarantine); attestation campaigns, enforcement, leaver handling |
 | Activity · SOC Dashboard · Alerts | Live decision stream; decisions-per-minute chart, top denied agents, playbook actions; triage drawer with evidence |
-| Agent Lineage | Interactive graph user → agents → tools → data for every task, with each decision and rule |
+| Agent Lineage | Registry lineage graph plus real OpenTelemetry execution timings, service names and shared trace IDs |
 | Prompt Injection · Usage & Cost | Detections with highlighted payloads and a scan playground; tokens, cost and latency per agent |
 | Access Control · Approvals | Live Mandates with countdowns and revoke; approval cards bound to the exact action (amount, IBAN, chain) |
-| MCP Servers & Tools · Policy Editor · Audit Ledger | Tool classification, pins and poisoning findings; the live Rego bundle and rule catalogue; hash-chain verification |
+| MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved configuration versions, replay and rollback; reference Rego source; hash-chain verification and evidence export |
 | Demo Studio (also the floating button) | Runs scenes S2–S5 and A4 against the real APIs, with a step-by-step run log and a reset |
 
 The header's persona switcher logs in as Mark (SOC), Sanne (risk approver), Priya (developer), Fatima (security),
@@ -61,6 +65,7 @@ cd web
 npm install          # uses your npm config, which on Infosys laptops points at the Infy Artifactory mirror
 npm run build        # writes web/dist, which the demo server serves at /ui
 cd ..
+.\deployment\local-postgres.ps1 -Action Start       # start the project-local persistent database
 .venv\Scripts\python -m aegis_demo.serve            # then open http://127.0.0.1:8000/ui/
 # UI development with hot reload: keep the server running, then in web/: npm run dev -> http://127.0.0.1:5173/ui/
 ```
@@ -82,10 +87,21 @@ a certified regulatory report or production access control.
 python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.lock      # through the Infy Artifactory mirror
 .venv\Scripts\python -m pip install --no-build-isolation --no-deps -e .
+.\deployment\local-postgres.ps1 -Action Start                 # uses installed PostgreSQL 18; loopback port 55432
 .venv\Scripts\python -m pytest                                 # 11 OPA-conformance tests need an opa binary
 .venv\Scripts\python -m aegis_demo.run                         # narrated demo of scenes S0-S5, S8
 .venv\Scripts\python -m aegis_demo.serve                       # console /ui, API docs /docs and /gw/docs (--port to change)
 ```
+
+The browser server now uses **persistent PostgreSQL**, not SQLite, by default. On this laptop the existing
+PostgreSQL 18 binaries are used to run a separate project cluster; no Docker, cloud database or Windows service
+is required. The setup script creates a non-superuser application login, random credentials and a random internal
+API token. Secrets and signing keys live in the ACL-restricted, Git-ignored `.local/` folder. Do not print, share,
+delete or commit `.local/connection.json`; it contains the database connection secret.
+
+To use a deliberately disposable SQLite demo, explicitly add `--ephemeral`. The narrated command and ordinary
+unit tests remain disposable. The server refuses to silently substitute SQLite when PostgreSQL is not configured.
+Database status and stop commands: `deployment/local-postgres.ps1 -Action Status` and `-Action Stop`.
 
 On the Infosys network add `--proxy ""` to pip if the configured proxy fails.
 The demo runs everything in one process: control plane, Gateway, seven mock-bank MCP servers (official MCP
@@ -109,9 +125,9 @@ scene-by-scene flow.
 |---|---|---|
 | Identity provider | Built-in dev IdP (no passwords — never expose) | Keycloak adapter / Microsoft Entra Agent ID adapter (not built yet) |
 | Policy engine | In-process Python engine implementing `config/policies/tool_call.rego` | OPA sidecar with the same Rego; `tests/test_policy.py` checks both agree when `opa` is installed |
-| Database | SQLite (`aiosqlite`) | PostgreSQL (`asyncpg`, extra `postgres`) |
+| Database | Persistent PostgreSQL for `serve`; SQLite only for tests/narration/explicit `--ephemeral` | Managed PostgreSQL, migration/backup/retention procedures still required |
 | Hot store | In-memory | Valkey (`ValkeyHotStore`, extra `valkey`) |
-| Signing keys | Generated at start-up | Azure Key Vault |
+| Signing keys | Persisted in protected `.local/keys` for the PostgreSQL console; ephemeral in unit tests | Azure Key Vault |
 | LLM | Deterministic fake endpoint (`demo/aegis_demo/fake_llm.py`) | OneStop-approved Azure OpenAI (`AEGIS_AZURE_OPENAI_*`) |
 
 ## API (selection)
@@ -124,7 +140,46 @@ scene-by-scene flow.
 
 Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment).
 
+Policy lifecycle: `GET|POST /v1/policies/versions` ·
+`POST /v1/policies/{id}/replay|submit|approve|reject|activate|rollback`.
+Investigations: `GET|PATCH /v1/alerts/{id}/case`. Risk: `GET /v1/risk/{agent_id}`.
+Measured traces: `GET /v1/traces?root_id=...` or `?trace_id=...`.
+
+## Demonstrate the new features
+
+1. Run **S7: EUR 5,000 policy threshold comparison** in Demo Studio while the payment threshold is EUR 10,000.
+   With healthy demo agents it completes without approval.
+2. Switch to **Priya Raman**, open **Policy Governance**, enter threshold `2000` and a justification,
+   save the draft, replay recent decisions, and submit it. Replay does not execute another transfer.
+3. Switch to **Fatima El Amrani**, select that version, add a review justification, approve, then activate.
+   The author cannot self-approve, even if they have both roles. Activation rejects a stale active-version pointer.
+   Fatima can also **reject with justification**; a rejected proposal cannot be activated. Both review outcomes
+   retain the reviewer and reason. Replay shows obligation/redaction changes as well as allow/deny changes.
+4. Run S7 again. The same EUR 5,000 transfer now waits for human approval. Switch to **Sanne Bakker** and approve
+   it in Approvals to complete it. As Fatima, select the original, superseded version and roll back; S7 is allowed again.
+5. Open **Agent Lineage** for the new task to see real spans. Older records without traces are not reconstructed
+   into fake timings. After an S4 attack, switch to **Mark Jansen**, open an alert, assign it, add notes and link
+   decision evidence. Resolution and false-positive transitions require a justification.
+   Saved evidence links retain the decision's task, trace and policy version, and open that exact task directly.
+6. Open an agent detail page for its adaptive risk explanation. A baseline needs 20 historical calls across five
+   completed active minutes. It honestly displays **warming up** until there is enough traffic; no history is seeded.
+7. As **Eva Visser**, export the evidence pack. It now also includes policy versions, the active pointer, SOC case
+   history, recorded risk scores and execution spans.
+
+PostgreSQL keeps the registry, policy changes, cases and evidence across restarts. The demo bank's synthetic
+customer changes, executed-transfer list and Studio run log remain in memory. Because the local hot store is
+volatile, restart revokes old task Mandates and cancels pending approvals instead of restoring access with lost
+taint/rate-limit state. Start a fresh task after restarting. Resolving an alert does not automatically resume an agent.
+
+This workflow edits supported configuration only. **It does not run or publish arbitrary Rego through OPA.**
+Changing the Python evaluator source requires a newly reviewed policy version; older incompatible inputs are
+skipped during replay. OPA deployment/publishing, production authentication and cloud telemetry export remain separate work.
+
 ## Tests and evidence
+
+Standalone SDK users must configure an OpenTelemetry SDK provider/exporter for SDK spans; the demo supplies its
+local provider. W3C trace context is explicitly carried by the SDK and gateway clients, not dependent on the
+demo's HTTP hook. Arbitrary baggage, prompts and exception text are not exported as trace attributes.
 
 `tests/` covers the PII and injection detectors, every policy rule, the ledger's tamper detection, and
 end-to-end scenes S1–S4 plus attacks A3, A4, A6, A7, A10, A11, A12, A16, A17, rate limiting, material-change
@@ -136,8 +191,10 @@ narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.tx
 
 See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords; the Python policy engine
 must be kept in step with the Rego (conformance tests); scripted planners stand in for LLM planning in the
-demo; the Policy Editor is read-only (simulation comes next); OPA/Keycloak/Entra adapters and the Azure
-deployment are not built yet; the demo's data lives in memory and resets when the server restarts.
+demo; governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; Keycloak/Entra
+adapters, managed OPA publishing and Azure deployment are not built yet. Adaptive risk is an explainable
+statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
+governance and evidence records now persist in PostgreSQL.
 
 ## Transparency: what was built when, and AI assistance
 
