@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common.ids import new_id
 from aegis.common.models import AgentStatus
-from aegis.control import checkpoints, investigations, ledger
+from aegis.control import investigations, ledger
 from aegis.control.auth import OPERATORS, require_roles
 from aegis.control.context import ControlContext, ctx, session
 from aegis.control.discovery import record_signal
@@ -26,6 +26,7 @@ from aegis.control.tables import (
     DiscoveryFinding,
     LedgerEntry,
     Mandate,
+    PolicyBundle,
     PolicyState,
     PolicyVersion,
     Tool,
@@ -545,9 +546,16 @@ def router() -> APIRouter:
 
     @r.get("/policies")
     async def policies(request: Request, s=Depends(session)):
-        """Current configuration and displayed reference rules; lifecycle lives under /policies/versions."""
-        policy_dir = Path(request.app.state.ctx.settings.policy_dir)
-        files = {f.name: f.read_text(encoding="utf-8") for f in sorted(policy_dir.iterdir()) if f.is_file()}
+        """The active version's configuration and the Rego that actually runs; lifecycle is under /policies/versions."""
+        settings = request.app.state.ctx.settings
+        state = await s.get(PolicyState, "tool-call")
+        active = await s.get(PolicyVersion, state.active_version)
+        bundle = await s.get(PolicyBundle, state.active_version)
+        if bundle is not None:
+            files = dict(bundle.modules)
+        else:  # a version saved before rules were versioned: show the repository files it was approved for
+            policy_dir = Path(settings.policy_dir)
+            files = {f.name: f.read_text(encoding="utf-8") for f in sorted(policy_dir.glob("*.rego"))}
         rules = []
         for name, text in files.items():
             if not name.endswith(".rego"):
@@ -565,15 +573,15 @@ def router() -> APIRouter:
                             "message": message.group(1) if message else "",
                         }
                     )
-        state = await s.get(PolicyState, "tool-call")
-        active = await s.get(PolicyVersion, state.active_version)
         return {
             "version": active.id,
             "files": files,
             "rules": rules,
             "data": active.configuration,
-            "engine": request.app.state.ctx.settings.policy_engine,
-            "editing": "supported-configuration-only",
+            "engine": settings.policy_engine,
+            # The python engine mirrors the repository rules, so only its configuration can change.
+            "editing": "configuration-only" if settings.policy_engine == "python" else "configuration-and-rules",
+            "rules_recorded": bundle is not None,
         }
 
     @r.get("/taxonomy")
@@ -616,9 +624,8 @@ def router() -> APIRouter:
         ]
 
     @r.get("/ledger/verify")
-    async def ledger_verify(c=Depends(ctx), s: AsyncSession = Depends(session)):
-        entries, signed = await checkpoints.load(s)
-        return checkpoints.verify(entries, signed, checkpoints.trusted_keys(c))
+    async def ledger_verify(s: AsyncSession = Depends(session)):
+        return await ledger.verify(s)
 
     @r.get("/usage")
     async def usage(s: AsyncSession = Depends(session)):

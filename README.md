@@ -17,7 +17,8 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Capability (PS-1) | Status | Where |
 |---|---|---|
 | Agent registry, lifecycle (register → approve → suspend → retire), risk tiering, signed passport | ✅ | `src/aegis/control/registry.py` |
-| Segregation of duties (registrant/owner cannot approve; approver ≠ initiator/owner) | ✅ | `registry.py`, `approvals.py` |
+| Segregation of duties (registrant/owner cannot approve; approver ≠ initiator/owner), checked per *person* across all of their accounts | ✅ | `registry.py`, `approvals.py`, `identity/people.py` |
+| Agent ownership (only an agent's owner can suspend/modify/retire it; SOC and risk approvers keep the kill switch) | ✅ | `registry.py` |
 | IdP integration seam + dev IdP; agents authenticate with `private_key_jwt` (no shared secrets) | ✅ | `src/aegis/control/identity/idp.py` |
 | **Every agent's own identity in Keycloak**: a per-agent client registered with the agent's public key only, signed-JWT sign-in, short-lived tokens checked on every Mandate request, kill switch that disables the identity, drift repair, shadow-identity discovery | ✅ (tested against a real Keycloak 26.2.5 and a fake; Entra Agent ID not built) | `agent_identity.py`, `identity_sync.py` |
 | JIT, task-scoped, purpose-bound Mandates; agent ∩ user ∩ purpose ("intersection rule") | ✅ | `src/aegis/control/identity/sts.py` |
@@ -30,21 +31,66 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | PII redaction (BSN 11-proof, IBAN, e-mail, phone) as a policy obligation | ✅ | `src/aegis/guard/pii.py` |
 | SOC detections, auto-suspend playbook, **cascade revocation** across delegated mandates | ✅ | `src/aegis/control/soc.py` |
 | Shadow-agent discovery: Gateway traffic (real time) + identity-provider scan (scheduled via `AEGIS_DISCOVERY_SCAN_INTERVAL`, and on demand), claim / quarantine | ✅ (telemetry, code and cloud sources planned, shown as such in the console) | `src/aegis/control/discovery.py` |
-| Re-attestation campaign, leaver → orphaned agents | ✅ (basic) | `registry.py` |
+| Ownership re-attestation: scheduled campaigns (default every 90 days), overdue alert (DET-14) or auto-suspend, leaver → orphaned agents, owner hand-over | ✅ | `ownership.py`, `registry.py` |
 | End-to-end lineage user → agents → tools → data → human approvals → **result** (completed / waiting / blocked / failed / revoked), per task and merged across a user's or an agent's recent tasks; the Gateway records each permitted call's real outcome (executed / tool error / failed) | ✅ (outcomes from earlier records show "not recorded", never guessed; the graph holds statuses and counts, not tool data) | `soc.py` (`/v1/lineage/{root}`, `/v1/lineage?subject=…\|agent_id=…`), gateway |
-| Auditor-only demo evidence pack: HTML report, JSON records, **signed** SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
-| Ledger signed at chained checkpoints with a dedicated key (published at `/.well-known/aegis-ledger-key`); optional external RFC 3161 timestamps of each checkpoint hash; rewritten history detected even with recomputed hashes | ✅ (tested against a fake TSA and DigiCert's public TSA; key file locally, Key Vault/HSM planned) | `src/aegis/control/checkpoints.py`, `evidence_verify.py` |
+| Auditor-only scoped, signed HTML/JSON/CSV reports; 15-control mappings, scheduled generation and saved review history | ✅ (synthetic application evidence; not certification) | `src/aegis/control/evidence.py`, `src/aegis/control/evidence_reports.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
-| Versioned policy configuration: draft, replay, separate approval, activation and rollback | ✅ (Python PDP configuration) | `src/aegis/control/policies.py` |
-| Policy-only time machine over recorded inputs; never executes tools or payments | ✅ (compatible evaluator versions) | `policies.py` |
+| Versioned policy configuration **and Rego**: draft, automatic checks, replay, Rego diff, separate approval, security sign-off for rule changes, activation and rollback; the engine runs the approved Rego from the database, never the file on disk | ✅ (Rego changes on the `rego` / `opa` engines; the Python mirror changes configuration only) | `src/aegis/control/policies.py`, `src/aegis/policy/rules_check.py` |
+| Policy-only time machine over recorded inputs, old rules vs new, flagging decisions that become more permissive; never executes tools or payments | ✅ | `policies.py` |
+| Approved Rego pushed to OPA on activation, rollback and start-up; an OPA that restarted empty gets it back | ✅ (fake OPA here; real OPA in CI) | `src/aegis/policy/engines.py` |
 | Shared OpenTelemetry trace across SDK, gateway, delegated agents and MCP; PostgreSQL exporter and UI waterfall | ✅ (local exporter, not cloud OTLP) | `src/aegis/telemetry.py` |
 | SOC case assignments, notes, evidence links, validated statuses and append-only history | ✅ | `src/aegis/control/investigations.py` |
 | Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
-| React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
+| React console in the prototype's look (live data, persona switcher, Bank Assistant and Investigation Copilot) | ✅ | `web/` |
 | Sign-in for people through any OpenID Connect provider (Keycloak, Microsoft Entra ID, Okta...): authorization code + PKCE, signature/issuer/audience/expiry checks, provider roles mapped to Aegis roles; dev login can be switched off | ✅ (tested against a fake provider and a built-in one; not yet against a live Keycloak or Entra tenant) | `src/aegis/control/identity/oidc.py`, `users.py`, `web/src/lib/auth.ts` |
 | Natural-language investigation Copilot (PS G2), investigator RBAC, read-only MCP evidence and verified citation IDs | Implemented; offline regression coverage, live Azure acceptance pending | `src/aegis/control/investigation.py`, `demo/aegis_demo/copilot.py` |
 | **Three policy engines on one governed policy**: the Python mirror, the authoritative Rego in-process (regopy), and an OPA server that must run exactly the approved Rego; any engine failure is a recorded deny | ✅ (OPA server tested against a fake OPA here; the real-OPA tests run in CI) | `src/aegis/policy/engines.py`, `config/policies/` |
-| Regulatory-grade evidence packs, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities, publishing Rego *source* changes through governance | ⏳ remaining | — |
+| Production evidence assurance (HSM signing, external timestamp, regulator filing), Azure deployment, Microsoft Entra Agent ID provisioning of agent identities, publishing Rego *source* changes through governance | ⏳ remaining | — |
+
+
+## Persistent synthetic banking sandbox
+
+The normal app no longer seeds thousands of inventory rows, constructs scripted Ava, exposes scripted
+scenario/reset routes, or mounts the fake LLM. Five MCP services operate on PostgreSQL-backed synthetic
+records: core-banking, payments, KYC, documents and CRM. The obsolete notification and poisoned FX fixture
+servers are retired on upgrade; their registry/audit records are preserved and hidden from the active tools UI.
+Only the explicit `aegis_demo.testing` fixture world retains the old servers and security scenarios.
+
+- Transfers lock the two accounts in a fixed order, debit and credit in one transaction, write two balanced
+  entries and a durable payment receipt, and append an audit event in the same commit. Insufficient funds,
+  unknown recipients and audit failures roll back all effects.
+- A unique task-root/tool operation key prevents duplicate execution. A repeated identical authorized call
+  returns the original receipt; changed arguments under the same key are refused. This is local transaction
+  idempotency, not a guarantee about external banking settlement.
+- Document checks validate stored ownership, supported type and expiry and retain a result. They do **not**
+  establish document authenticity or verify a real person's identity. Address changes require a successful
+  check for the same customer in the same task, plus the assistant's explicit customer confirmation.
+- The customer UI shows the current stored balance, address and recent committed payments without an Azure
+  request. MCP endpoints reject direct callers; a process-local, gateway-brokered credential is sent only
+  to the exact built-in endpoints, with the verified task's subject/root/agent. This is not enterprise bank IAM.
+
+Tables: `bank_customers`, `bank_accounts`, `bank_documents`, `bank_operations`, `bank_payments`, `bank_entries`.
+Synthetic starter records are inserted once; startup never resets an existing balance or address. Old in-memory
+fixture transfers cannot be recovered as settled database payments and are not fabricated during migration.
+
+On first upgraded startup, changed payment/KYC definitions are imported and **remain quarantined until
+independent review**. As Fatima El Amrani, open **MCP Servers & Tools**, review the updated definitions and
+approve `payments.initiate_transfer`, `kyc.verify_document` and `kyc.get_kyc_status`. The assistant displays any
+other tool requiring review. Do not use a poisoning override for this migration. Existing agent suspensions,
+classification edits, approvals, audit records and signing keys are not reset.
+
+For targeted registry cleanup (never a database reset):
+
+```powershell
+.\.venv\Scripts\python -m aegis_demo.registry_cleanup --check
+.\.venv\Scripts\python -m aegis_demo.registry_cleanup --apply
+# Recovery, if required: use the batch_id printed by --apply
+.\.venv\Scripts\python -m aegis_demo.registry_cleanup --restore-batch '<batch_id>'
+```
+
+Only original `registered_by="seed"` scale-test rows without credentials, capabilities, activity or delegation
+references are eligible. Snapshots remain in `registry_seed_archive`; genuine/user-created agents and evidence
+are retained. There is no automatic seed inventory creation on normal startup.
 
 ## The console
 
@@ -52,14 +98,13 @@ A React + TypeScript console in the look of the Fabric Vibe Studio prototype, on
 
 | Page | What it shows |
 |---|---|
-| Agent Registry / agent detail | 1,247 agents with filters and CSV export; Passport, explained risk score, capabilities, delegation rules, lifecycle trail, kill switch with blast-radius preview |
+| Agent Registry / agent detail | Functional registered agents only (Ava, KYC, Payments, Investigation Copilot by default), with filters and CSV export; Passport, explained risk score, capabilities, delegation rules, lifecycle trail, kill switch with blast-radius preview |
 | Shadow Agents · Re-attestation | Discovery-source status (live, scheduled or planned) with the last automatic IdP scan; findings from Gateway traffic and IdP scans (claim / quarantine); attestation campaigns, enforcement, leaver handling |
 | Activity · SOC Dashboard · Alerts | Live decision stream; decisions-per-minute chart, top denied agents, playbook actions; triage drawer with evidence |
 | Agent Lineage | Per-task graph from user to approvals and a result node, or merged over the last 24 h for a user or an agent (call counts, denials, click a call to filter the decisions); plus real OpenTelemetry execution timings, service names and shared trace IDs |
 | Prompt Injection · Usage & Cost | Detections with highlighted payloads and a scan playground; tokens, cost and latency per agent |
 | Access Control · Approvals | Live Mandates with countdowns and revoke; approval cards bound to the exact action (amount, IBAN, chain) |
-| MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved configuration versions, replay and rollback; reference Rego source; hash-chain verification and evidence export |
-| Demo Studio | Runs scripted scenes S2–S5 and A4 against the real APIs, with a step-by-step run log and a reset |
+| MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved versions of configuration and Rego (rules editor, repository import, check report, Rego diff, security sign-off), replay and rollback; hash-chain verification and evidence export |
 | Investigation Copilot (also the floating bot for investigators) | Real Azure tool selection through Aegis; cited, redacted excerpts from recorded decisions, alerts, traces and other audit records; read-only |
 
 ### Investigation Copilot (PS good-to-have G2)
@@ -143,37 +188,20 @@ cd ..
 # UI development with hot reload: keep the server running, then in web/: npm run dev -> http://127.0.0.1:5173/ui/
 ```
 
-Suggested demo order: Demo Studio → S2 → open Agent Lineage → S3 → switch to Sanne and approve in Approvals (the
-payment then executes by itself) → S4 → SOC Dashboard and Alerts → Reset.
+Suggested demo order: Bank Assistant → account inquiry → document D-77 → confirmed address change →
+EUR 25,000 synthetic transfer → switch to Sanne and approve → return to Jan and Resume →
+inspect the changed stored balance, payment ID, lineage and audit → Investigation Copilot as Mark.
+Approval alone does not execute a transfer; the customer explicitly resumes it.
 
 For the evidence finale, switch to **Eva Visser (Auditor)**, open **Audit Ledger**, and download the evidence pack.
 Open `report.html` in the ZIP for the readable story. Extract `verify_pack.py` and run
-`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip" --expect-key <fingerprint>` (the fingerprint is published
-at `/.well-known/aegis-ledger-key`). It recomputes the file hashes and ledger chain and checks the signed manifest,
-every signed checkpoint and every RFC 3161 timestamp token (signature checks need the `cryptography` package). The
-export is auditor-only, first signs the current ledger tip, and refuses to download if the chain or any signed
-checkpoint does not verify. It contains synthetic demo records, including approval arguments and policy inputs, so
-treat the ZIP as confidential. The local role gate uses the passwordless dev IdP; this is **not** a certified
-regulatory report or production access control.
-
-### Signed checkpoints and external timestamps
-
-The hash chain alone detects a single edited entry, but someone with database control could edit an entry and
-recompute every later hash. Aegis therefore signs the ledger tip at **checkpoints** (every minute in the console when
-there are new entries, on demand, and at every export) with a dedicated ledger key, persisted as
-`.local/keys/ledger.pem` beside the other keys (Key Vault/HSM in production). Checkpoints chain to each other, and
-verification compares the ledger with every one, so a rewritten history fails even when all hashes were recomputed.
-The Audit Ledger page shows *History rewritten* in that case.
-
-Set `AEGIS_TSA_URL` (for example `http://timestamp.digicert.com`) to have the hash of each signed checkpoint
-(never ledger content) timestamped by an independent RFC 3161 authority. Its signed token proves the checkpoint
-existed at that time. If the authority is unreachable, checkpoints stay signed and show *timestamp pending*; they
-are retried, never faked. The pack's `anchors/` tokens can also be checked with
-`openssl ts -verify -in checkpoint-N.tsr -digest <hex> -CAfile <ca-bundle>`.
-
-Limits: a stolen ledger key could sign a false history (hence Key Vault/HSM and external timestamps); a timestamp
-proves *when* a checkpoint existed, not that its events are true; deleting the latest checkpoints is detectable only
-against an earlier exported pack or the authority's tokens, so keep packs outside this system.
+`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip" --key <trusted-fingerprint>` to verify its signatures,
+file hashes and selected ledger inclusion proofs. The server verifies the complete source chain; the scoped
+offline verifier does not recompute undisclosed contents. The export is
+auditor-only and refuses to download if ledger verification fails. It contains synthetic demo records,
+including approval arguments and policy inputs, so treat the ZIP as confidential. Its manifest is not
+backed by an external trust service or timestamp, and the default local role gate uses the passwordless dev IdP; this is **not**
+a certified regulatory report or production access control.
 
 ## Run it (Windows, Python 3.14; no Docker needed)
 
@@ -183,14 +211,14 @@ python -m venv .venv
 .venv\Scripts\python -m pip install --no-build-isolation --no-deps -e .
 .\deployment\local-postgres.ps1 -Action Start                 # uses installed PostgreSQL 18; loopback port 55432
 .venv\Scripts\python -m pytest                                 # tests needing a real OPA binary skip without one (CI has it)
-.venv\Scripts\python -m aegis_demo.run                         # narrated demo of scenes S0-S5, S8
+.venv\Scripts\python -m aegis_demo.run                         # optional offline security fixture driver, not the app
 .venv\Scripts\python -m aegis_demo.serve                       # console /ui, API docs /docs and /gw/docs (--port to change)
 ```
 
 The browser server now uses **persistent PostgreSQL**, not SQLite, by default. On this laptop the existing
 PostgreSQL 18 binaries are used to run a separate project cluster; no Docker, cloud database or Windows service
 is required. The setup script creates a non-superuser application login, random credentials and a random internal
-API token. Secrets and signing keys live in the ACL-restricted, Git-ignored `.local/` folder. Do not print, share,
+service credentials. Secrets and signing keys live in the ACL-restricted, Git-ignored `.local/` folder. Do not print, share,
 delete or commit `.local/connection.json`; it contains the database connection secret.
 
 To use a deliberately disposable SQLite demo, explicitly add `--ephemeral`. The narrated command and ordinary
@@ -198,8 +226,9 @@ unit tests remain disposable. The server refuses to silently substitute SQLite w
 Database status and stop commands: `deployment/local-postgres.ps1 -Action Status` and `-Action Stop`.
 
 On the Infosys network add `--proxy ""` to pip if the configured proxy fails.
-The demo runs everything in one process: control plane, Gateway, seven mock-bank MCP servers (official MCP
-SDK), the KYC and Payments agents (A2A) and Ava, with synthetic data only. Personas log in through the dev IdP
+The normal app runs the control plane, Gateway, five persistent synthetic-bank MCP servers (official MCP
+SDK), a read-only investigation MCP server and four functional agents in one process. Ava uses Azure tool calling
+and LangGraph; KYC executes Microsoft Agent Framework; Payments is a deterministic transactional specialist. Personas log in through the dev IdP
 (`POST /idp/login {"username": "mark.jansen"}`); the persona list is in `demo/aegis_demo/catalog.py`.
 
 ## Sign in with SSO (OpenID Connect)
@@ -257,6 +286,7 @@ is public with S256 PKCE and exact redirect URIs. Stop the built-in `--sso` serv
 | `mark.jansen` | soc-analyst | Mark Jansen |
 | `fatima.elamrani` | security-approver | Fatima El Amrani |
 | `fatima.elamrani.policy-approver` | policy-approver | Fatima El Amrani |
+| `lars.devos` | security-approver | Lars de Vos (the second sign-off on Rego changes) |
 | `eva.visser` | auditor | Eva Visser |
 | `admin` | admin | Platform Admin |
 
@@ -314,13 +344,29 @@ something unexpected, or runs different Rego, the call is **denied** (`PDP-001`)
 ever allowed by default. Switching engine on an existing database needs one newly approved policy version, because a
 version is bound to the evaluator that was approved (`rules_hash`).
 
+**The Rego is governed like the configuration.** Every policy version stores its own Rego and test cases in the
+database, and the `rego` / `opa` engines run exactly that Rego: editing `config/policies/*.rego` changes nothing until
+a version that imports it is approved and activated (the console shows when the repository differs). A draft keeps the
+active rules, edits them in the console, or imports them from the repository. Before it is saved it must pass automatic
+checks: it compiles, keeps `data.aegis.tool_call.decision`, stays in package `aegis.tool_call`, uses no network,
+introspection or non-deterministic builtins (`http.send`, `opa.runtime`, `time.now_ns`, ...), and passes every case in
+`config/policy_tests/tool_call_cases.json` (generated from the same shared cases as the Rego unit tests; a deliberate
+behaviour change updates its cases in the same draft). Replay then compares old rules with new on recorded traffic and
+flags every decision that becomes more permissive, the reviewer sees the Rego diff, and **a rule change (or a
+configuration change that loosens a replayed decision) needs a security sign-off from a second person** besides the
+policy approver (`SEC-001` until it has one). With OPA, Aegis pushes the approved Rego through OPA's policy API when a
+version is activated or rolled back and at start-up, and puts it back if OPA restarted empty; an OPA whose Rego was
+changed some other way is not silently overwritten: decisions fail closed until someone pushes the approved policy
+(`POST /v1/policies/opa/sync`). The Python mirror cannot run other Rego, so on `python` versions change configuration
+only.
+
 The Rego is hardened to fail closed: missing or wrong-typed fields deny, an unknown data ceiling counts as `public`, and
 a transfer amount that is not a number (for example the text `"25000"`) is refused (`ARG-001`) instead of compared.
 
 ```powershell
 $env:AEGIS_POLICY_ENGINE = 'rego'; .venv\Scripts\python -m aegis_demo.serve --ephemeral      # the Rego, no binary
 # with an OPA binary (AEGIS_OPA_BINARY, `opa` on PATH, or Downloads\opa\opa_windows_amd64.exe):
-.venv\Scripts\python -m aegis_demo.opa_setup start          # OPA on http://127.0.0.1:8181 serving config/policies
+.venv\Scripts\python -m aegis_demo.opa_setup start          # an empty OPA on :8181; Aegis pushes the approved Rego
 . .\.local\opa\aegis-opa-env.ps1; .venv\Scripts\python -m aegis_demo.serve --ephemeral
 .venv\Scripts\python -m aegis_demo.opa_setup test           # opa test config/policies (the generated Rego unit tests)
 ```
@@ -351,7 +397,7 @@ scene-by-scene flow.
 | Database | Persistent PostgreSQL for `serve`; SQLite only for tests/narration/explicit `--ephemeral` | Managed PostgreSQL, migration/backup/retention procedures still required |
 | Hot store | In-memory | Valkey (`ValkeyHotStore`, extra `valkey`) |
 | Signing keys | Persisted in protected `.local/keys` for the PostgreSQL console; ephemeral in unit tests | Azure Key Vault |
-| LLM | Offline fake by default; configured Azure uses a separate, bounded gateway-only client | Entra/key-vault credential integration and cloud operations remain planned |
+| LLM | Normal app: Azure only, no fake fallback. Missing configuration disables live tasks. Offline test fixtures are explicit | Entra/key-vault credential integration and cloud operations remain planned |
 
 ## One real Azure model call
 
@@ -368,7 +414,8 @@ and a prompt-free authorization receipt. A configured Azure failure does not fal
 The command never starts/restarts the console or asks for its Azure key. The server automatically reads
 repository-root `.env` and `.env.local`; process environment variables take priority. Use `.env.azure.example`
 as an Azure-only template, and keep actual keys in Git-ignored local files or server environment variables,
-not in source or command-line arguments. The narrated demo and Studio scenes remain scripted/offline.
+not in source or command-line arguments. The narrated test driver remains an explicit scripted/offline fixture. Scripted Studio routes and the fake model
+are not mounted in the normal app; its Studio UI and launchers have been removed.
 The smoke call checks inference only. For actual framework execution, use the separate
 [live Bank Assistant](docs/live-agents.md), with installed agent extras and explicit model-processing controls.
 
@@ -389,8 +436,8 @@ See [configuration, launch commands, demonstration and limitations](docs/live-ag
 `GET /v1/lineage/{root}` · `GET /v1/lineage?subject=|agent_id=&hours=&limit=` · `GET /v1/ledger/verify` · Gateway: `POST /gw/mcp/{server}`, `POST /gw/a2a/{agent}`,
 `POST /gw/llm/v1/chat/completions`, `GET /gw/.well-known/oauth-protected-resource/mcp/{server}` (RFC 9728).
 
-Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment).
-Ledger signing: `GET /.well-known/aegis-ledger-key` (public) · `GET|POST /v1/ledger/checkpoints`.
+Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment) ·
+`GET /v1/evidence/key` (public evidence-key fingerprint).
 
 Policy lifecycle: `GET|POST /v1/policies/versions` ·
 `POST /v1/policies/{id}/replay|submit|approve|reject|activate|rollback`.
@@ -401,18 +448,20 @@ Measured traces: `GET /v1/traces?root_id=...` or `?trace_id=...`.
 
 ## Demonstrate the new features
 
-1. Run **S7: EUR 5,000 policy threshold comparison** in Demo Studio while the payment threshold is EUR 10,000.
-   With healthy demo agents it completes without approval.
+1. In Bank Assistant, request a EUR 5,000 transfer to the existing synthetic landlord, explicitly indicating
+   an existing beneficiary. Confirm the exact proposal. With a EUR 10,000 threshold and otherwise permitting
+   policy, it can execute without risk approval. This moves synthetic funds; use separate task IDs for comparisons.
 2. Switch to **Priya Raman**, open **Policy Governance**, enter threshold `2000` and a justification,
    save the draft, replay recent decisions, and submit it. Replay does not execute another transfer.
 3. Switch to **Fatima El Amrani**, select that version, add a review justification, approve, then activate.
    The author cannot self-approve, even if they have both roles. Activation rejects a stale active-version pointer.
    Fatima can also **reject with justification**; a rejected proposal cannot be activated. Both review outcomes
    retain the reviewer and reason. Replay shows obligation/redaction changes as well as allow/deny changes.
-4. Run S7 again. The same EUR 5,000 transfer now waits for human approval. Switch to **Sanne Bakker** and approve
-   it in Approvals to complete it. As Fatima, select the original, superseded version and roll back; S7 is allowed again.
+4. Request the same EUR 5,000 transfer as a new task and confirm it. It now waits for human approval. Switch to
+   **Sanne Bakker**, approve the exact request, return to Jan and Resume. As Fatima, roll back to the original
+   superseded policy version; a new equivalent task no longer needs the threshold approval.
 5. Open **Agent Lineage** for the new task to see real spans. Older records without traces are not reconstructed
-   into fake timings. After an S4 attack, switch to **Mark Jansen**, open an alert, assign it, add notes and link
+   into fake timings. When a suspicious request raises an alert, switch to **Mark Jansen**, assign it, add notes and link
    decision evidence. Resolution and false-positive transitions require a justification.
    Saved evidence links retain the decision's task, trace and policy version, and open that exact task directly.
 6. Open an agent detail page for its adaptive risk explanation. A baseline needs 20 historical calls across five
@@ -420,8 +469,8 @@ Measured traces: `GET /v1/traces?root_id=...` or `?trace_id=...`.
 7. As **Eva Visser**, export the evidence pack. It now also includes policy versions, the active pointer, SOC case
    history, recorded risk scores and execution spans.
 
-PostgreSQL keeps the registry, policy changes, cases and evidence across restarts. The demo bank's synthetic
-customer changes, executed-transfer list and Studio run log remain in memory. Because the local hot store is
+PostgreSQL keeps the registry, policy changes, cases, evidence, synthetic profiles, balances, payments and
+idempotency receipts across restarts. There is no Studio run log in the normal app. Because the local hot store is
 volatile, restart revokes old task Mandates and cancels pending approvals instead of restoring access with lost
 taint/rate-limit state. Start a fresh task after restarting. Resolving an alert does not automatically resume an agent.
 
@@ -431,6 +480,13 @@ requires a newly reviewed policy version; older incompatible inputs are skipped 
 authentication and cloud telemetry export remain separate work.
 
 ## Tests and evidence
+
+As **Eva Visser (Auditor)**, open **Audit Ledger → Compliance evidence & signed reports** to generate a
+date/agent/task-scoped report, inspect the 15-control coverage matrix, and create hourly/daily/weekly schedules.
+Reports and schedules persist in PostgreSQL; the worker signs scheduled ZIPs without an Azure call. Unrelated
+ledger payloads are omitted using signed inclusion proofs, rather than exporting the complete audit history.
+See [the reporting walkthrough and limitations](docs/evidence-reporting.md). Restart the backend after updating
+the code to create the new additive tables and start its reporting worker; no database reset is needed.
 
 Standalone SDK users must configure an OpenTelemetry SDK provider/exporter for SDK spans; the demo supplies its
 local provider. W3C trace context is explicitly carried by the SDK and gateway clients, not dependent on the
@@ -446,15 +502,18 @@ narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.tx
 
 See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords (switch it off with `AEGIS_ENABLE_DEV_LOGIN=false`); SSO has been tested only against a fake provider and the built-in one, not a live Keycloak/Entra tenant; the Python policy engine
 mirrors the Rego (kept in step by exact and differential tests); a real OPA binary has not been run on the
-development laptop (no approved download route yet), so the real-OPA tests run only in CI; Studio scenes remain scripted, while the optional
+development laptop (no approved download route yet), so the real-OPA tests run only in CI; scripted security scenes exist only in explicit offline fixtures, while the
 [Bank Assistant](docs/live-agents.md) uses real LangGraph/Azure planning and a Microsoft Agent Framework KYC workflow;
-governed editing changes supported configuration, not Rego source; Microsoft Entra Agent ID provisioning and
+Rego can be changed through the governed workflow only on the `rego` / `opa` engines (the Python mirror is fixed), and
+pushing it to a real OPA has been tested only in CI and only into an OPA started without policy files (one that loaded
+files itself is updated by module id, tested against the fake OPA); Microsoft Entra Agent ID provisioning and
 Azure deployment are not built yet; Keycloak agent identities have been run
 only on a local single-node Keycloak (no clustering, TLS or secret manager). Adaptive risk is an explainable
-statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
-governance and evidence records now persist in PostgreSQL. The scheduled identity-provider scan runs in every
-control-plane process and keeps its last-run status in memory; with several replicas each would scan (findings are
-de-duplicated) until a database leader lock is added. Telemetry, code-repository and cloud discovery sources are planned.
+statistical baseline, not a trained model. Single-process hot-store and pending workflow state remain volatile;
+banking balances/receipts, governance and evidence records persist in PostgreSQL. The scheduled identity-provider
+scan runs in every control-plane process and keeps its last-run status in memory; with several replicas each would
+scan (findings are de-duplicated) until a database leader lock is added. Telemetry, code-repository and cloud
+discovery sources are planned.
 
 ## Transparency: what was built when, and AI assistance
 

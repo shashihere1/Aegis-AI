@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from opentelemetry import trace
 
+from aegis.common.banking import upstream_headers as bank_headers
 from aegis.common.crypto import SigningKey
 from aegis.common.hashing import action_hash, tool_definition_hash
 from aegis.common.investigation import ENTITLEMENT, SERVER, upstream_headers
@@ -207,7 +208,7 @@ def create_gateway(
             }
         )
 
-    async def upstream_call(server_url: str, server_id: str, body: dict) -> dict:
+    async def upstream_call(server_url: str, server_id: str, body: dict, claims: dict | None = None) -> dict:
         response = await http.post(
             server_url,
             headers=tracing_headers(
@@ -215,6 +216,7 @@ def create_gateway(
                     **MCP_HEADERS,
                     **brokered_headers(server_id),
                     **upstream_headers(settings, server_id, server_url),
+                    **bank_headers(settings, server_id, server_url, claims),
                 }
             ),
             json=body,
@@ -440,7 +442,7 @@ def create_gateway(
                 )
 
         try:
-            upstream = await upstream_call(server_url, server_id, body)
+            upstream = await upstream_call(server_url, server_id, body, claims)
         except Exception:
             # The call was permitted but never completed; record that, so lineage does not show a silent gap.
             await record(claims, tool_id, verdict, snapshot={**policy_input, "outcome": "failed"}, started=started)

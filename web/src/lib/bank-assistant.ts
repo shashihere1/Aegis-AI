@@ -24,6 +24,8 @@ export type BankRun = {
 };
 
 export type BankStatus = {
+  bank_storage?: string;
+  bank_tools_requiring_review?: string[];
   ready: boolean;
   azure_configured: boolean;
   frameworks: Record<string, string | null>;
@@ -74,6 +76,8 @@ export function bankStatusLabel(status: string): string {
     confirmation_required: "Your confirmation needed",
     approval_required: "Risk approval required",
     completed: "Completed",
+    not_executed: "No action prepared",
+    uncertain: "Execution uncertain",
     failed: "Could not finish",
     denied: "Blocked",
     blocked: "Blocked",
@@ -136,4 +140,11 @@ export function bankReceipt(event: BankEvent): BankReceipt | null {
     return { title: "Synthetic transfer accepted", value: data.amount, money: true, detail: string("payment_id") };
   }
   return null;
+}
+
+/** Old text-only action runs remain historical records, not pending or verified writes. */
+export function lacksChangeReceipt(run: BankRun): boolean {
+  const tool = run.mode === "transfer" ? "initiate_transfer" : run.mode === "address" ? "update_address" : null;
+  return run.status === "completed" && tool !== null
+    && !run.events.some(event => event.label === tool && bankReceipt(event) !== null);
 }

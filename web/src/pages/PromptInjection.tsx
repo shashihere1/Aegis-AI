@@ -29,7 +29,7 @@ export function PromptInjection() {
         <Card title="Detections">
           {!detections.length ? (
             <EmptyState icon={ShieldAlert} title="No injections detected yet">
-              Run scene S4 from Demo Studio: a rental contract hides an instruction to e-mail customer records outside the bank.
+              The synthetic D-99 rental contract contains a hidden exfiltration instruction. Scan it below, or ask Bank Assistant to read it.
             </EmptyState>
           ) : (
             <ul className="divide-y divide-line">

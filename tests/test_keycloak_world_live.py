@@ -17,7 +17,7 @@ from aegis.common.settings import Settings
 from aegis.control.identity.agent_identity import KeycloakAgentIdentity
 from aegis_demo import data, mcp_servers
 from aegis_demo import keycloak_setup as kc
-from aegis_demo.world import BASE, FAKE_LLM_URL, running_world
+from aegis_demo.testing import BASE, FAKE_LLM_URL, running_world
 
 _CUSTOMERS = copy.deepcopy(data.CUSTOMERS)
 

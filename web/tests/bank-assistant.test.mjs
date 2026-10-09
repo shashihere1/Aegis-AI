@@ -8,7 +8,7 @@ const source = await readFile(new URL("../src/lib/bank-assistant.ts", import.met
 const { outputText } = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
-const { bankReceipt, bankRunStats, bankStatusLabel, eventEstimate } = await import(
+const { bankReceipt, bankRunStats, bankStatusLabel, eventEstimate, lacksChangeReceipt } = await import(
   `data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`
 );
 
@@ -73,6 +73,20 @@ test("run totals count only model estimates and actual tool results", () => {
 test("waiting and stopped states have readable, non-success labels", () => {
   assert.equal(bankStatusLabel("confirmation_required"), "Your confirmation needed");
   assert.equal(bankStatusLabel("approval_required"), "Risk approval required");
+  assert.equal(bankStatusLabel("not_executed"), "No action prepared");
+  assert.equal(bankStatusLabel("uncertain"), "Execution uncertain");
   assert.equal(bankStatusLabel("interrupted"), "Interrupted");
   assert.equal(bankStatusLabel("future_state"), "future state");
+});
+
+test("historical text-only action runs get a notice without becoming pending actions", () => {
+  const balance = { kind: "tool", label: "get_balance", result: { balance_eur: 48250.75 } };
+  const run = { status: "completed", mode: "transfer", events: [balance] };
+  assert.equal(lacksChangeReceipt(run), true);
+  assert.equal(lacksChangeReceipt({ ...run, mode: "address" }), true);
+  assert.equal(lacksChangeReceipt({ ...run, mode: "inquiry" }), false);
+  assert.equal(lacksChangeReceipt({ ...run, status: "confirmation_required" }), false);
+  assert.equal(lacksChangeReceipt({ ...run, events: [
+    balance, { kind: "tool", label: "initiate_transfer", result: { status: "accepted", payment_id: "PAY-1", amount: 5000 } },
+  ] }), false);
 });

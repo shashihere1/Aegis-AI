@@ -68,7 +68,8 @@ def router() -> APIRouter:
         return [{**approval_dict(a), "chain_names": [names.get(x, x) for x in a.chain]}
                 for a in rows if status in (None, "all", a.status)]
 
-    async def decide(approval_id: str, verdict: str, body: DecisionBody, s: AsyncSession, user: Persona):
+    async def decide(c: ControlContext, approval_id: str, verdict: str, body: DecisionBody, s: AsyncSession,
+                     user: Persona):
         approval = await s.get(Approval, approval_id)
         if approval is None:
             raise HTTPException(404, "unknown approval")
@@ -76,7 +77,9 @@ def router() -> APIRouter:
         if approval.status != "pending":
             raise HTTPException(409, f"approval is {approval.status}")
         owners = {a.owner for a in (await s.execute(select(Agent).where(Agent.id.in_(approval.chain)))).scalars()}
-        if approval.subject == f"user:{user.username}" or user.username in owners:
+        initiator = approval.subject.removeprefix("user:") if approval.subject.startswith("user:") else None
+        involved = ([initiator] if initiator else []) + sorted(owners)
+        if any([await c.people.same_person(s, user, name) for name in involved]):
             raise HTTPException(403, "SOD-003: approver cannot be the initiating user or an owner of an agent "
                                      "in the chain")
         approval.status, approval.approver = verdict, user.username
@@ -88,14 +91,14 @@ def router() -> APIRouter:
         return approval_dict(approval)
 
     @r.post("/{approval_id}/approve")
-    async def approve(approval_id: str, body: DecisionBody, s: AsyncSession = Depends(session),
+    async def approve(approval_id: str, body: DecisionBody, request: Request, s: AsyncSession = Depends(session),
                       user: Persona = Depends(require_roles("risk-approver"))):
-        return await decide(approval_id, "approved", body, s, user)
+        return await decide(request.app.state.ctx, approval_id, "approved", body, s, user)
 
     @r.post("/{approval_id}/reject")
-    async def reject(approval_id: str, body: DecisionBody, s: AsyncSession = Depends(session),
+    async def reject(approval_id: str, body: DecisionBody, request: Request, s: AsyncSession = Depends(session),
                      user: Persona = Depends(require_roles("risk-approver"))):
-        return await decide(approval_id, "rejected", body, s, user)
+        return await decide(request.app.state.ctx, approval_id, "rejected", body, s, user)
 
     @r.get("/{approval_id}/status")
     async def status(approval_id: str, request: Request, s: AsyncSession = Depends(session)):

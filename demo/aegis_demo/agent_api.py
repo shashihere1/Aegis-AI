@@ -14,14 +14,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 
+from aegis.common.banking import SERVERS as BANK_SERVERS
 from aegis.common.hashing import sha256_hex
 from aegis.control import ledger
 from aegis.control.auth import OPERATORS, require_roles
 from aegis.control.identity.idp import Persona
 from aegis.control.model_controls import budget_status, policy, policy_error
-from aegis.control.tables import AgentRun, Approval, Mandate
+from aegis.control.tables import AgentRun, Approval, Mandate, Tool
 from aegis.sdk import AegisDenied, LlmCallError
-from aegis_demo.agent_runtime import MODES, LiveAva, framework_status
+from aegis_demo.agent_runtime import MODES, ExecutionUncertain, LiveAva, framework_status
 
 OPEN = {"running", "confirmation_required", "approval_required"}
 
@@ -137,6 +138,8 @@ def router(get_world) -> APIRouter:
             run["status"], run["reply"] = "cancelled", "Run cancelled. Check verified receipts before a new write."
         except LlmCallError as exc:
             run["status"], run["reply"] = "blocked", f"{exc.code}: {exc}"
+        except ExecutionUncertain as exc:
+            run["status"], run["reply"] = "uncertain", str(exc)
         except AegisDenied as exc:
             run["status"], run["reply"] = "blocked", str(exc)
         except ValidationError:
@@ -183,6 +186,20 @@ def router(get_world) -> APIRouter:
                 azure_ready = True
             except Exception:
                 pass
+        async with w.ctx.db.sessionmaker() as s:
+            review = (
+                list(
+                    (
+                        await s.scalars(
+                            select(Tool.id)
+                            .where(Tool.server_id.in_(BANK_SERVERS), Tool.status != "approved")
+                            .order_by(Tool.id)
+                        )
+                    ).all()
+                )
+                if w.bank
+                else []
+            )
         return {
             "ready": azure_ready and all(frameworks.values()) and error is None,
             "frameworks": frameworks,
@@ -191,7 +208,9 @@ def router(get_world) -> APIRouter:
             "azure_configured": azure_ready,
             "budget": await budget_status(w.ctx, w.agent_ids["ava"]),
             "synthetic_bank": True,
-            "passwordless_demo_identity": True,
+            "passwordless_demo_identity": w.settings.enable_dev_login,
+            "bank_storage": w.ctx.db.engine.dialect.name if w.bank else "offline-fixtures",
+            "bank_tools_requiring_review": review,
             "opa_used_for_llm": False,
         }
 

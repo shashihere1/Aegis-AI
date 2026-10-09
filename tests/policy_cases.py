@@ -1,6 +1,6 @@
 """Shared policy cases: one source of truth for the Python, Rego (regopy) and OPA tests, and for the Rego unit tests.
 
-    python tests/policy_cases.py --write     # regenerate config/policies/tool_call_test.rego after changing cases
+    python tests/policy_cases.py --write     # regenerate the Rego unit tests and config/policy_tests after changes
 
 tests/test_policy.py checks that the generated file is up to date, so the Rego unit tests that `opa test` runs in CI
 always describe exactly the cases the Python and regopy tests verify locally.
@@ -14,6 +14,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 POLICY_DIR = str(REPO / "config" / "policies")
 REGO_TEST_FILE = Path(POLICY_DIR) / "tool_call_test.rego"
+# The same cases as data, for the control plane's automatic checks on a proposed Rego change (regopy cannot run
+# `test_*` rules). Kept outside config/policies so OPA, which loads every JSON file there as data, never sees it.
+CASES_FILE = REPO / "config" / "policy_tests" / "tool_call_cases.json"
 
 BASE = {
     "subject": {
@@ -288,6 +291,26 @@ def render_rego_tests(obligation_types: dict[str, set[str]]) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def render_cases_json(obligation_types: dict[str, set[str]]) -> str:
+    """The cases as the JSON the policy workflow runs against a proposed Rego change before it can be submitted."""
+    cases = [
+        {
+            "name": name,
+            "input": policy_input,
+            "decision": decision,
+            "rules": sorted(rules),
+            "match": "exact",
+            "obligations": sorted(obligation_types[name]),
+        }
+        for name, (policy_input, decision, rules) in CASES.items()
+    ]
+    cases += [
+        {"name": f"stricter_{name}", "input": item, "decision": "deny", "rules": sorted(rules), "match": "include"}
+        for name, (item, rules) in REGO_STRICTER.items()
+    ]
+    return json.dumps(cases, indent=1, sort_keys=True) + "\n"
+
+
 def expected_obligation_types() -> dict[str, set[str]]:
     sys.path.insert(0, str(REPO / "src"))
     from aegis.policy.engine import PythonEngine
@@ -302,7 +325,10 @@ def expected_obligation_types() -> dict[str, set[str]]:
 
 if __name__ == "__main__":
     if "--write" in sys.argv:
-        REGO_TEST_FILE.write_text(render_rego_tests(expected_obligation_types()), encoding="utf-8")
-        print(f"wrote {REGO_TEST_FILE}")
+        types = expected_obligation_types()
+        REGO_TEST_FILE.write_text(render_rego_tests(types), encoding="utf-8")
+        CASES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CASES_FILE.write_text(render_cases_json(types), encoding="utf-8")
+        print(f"wrote {REGO_TEST_FILE} and {CASES_FILE}")
     else:
         print(render_rego_tests(expected_obligation_types()))

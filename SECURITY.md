@@ -9,9 +9,7 @@ Aegis is a security control, so it is designed to fail closed:
 - **Containment.** Critical detections suspend the agent, revoke every mandate in its chains and disable its
   IdP identity. Revocation is checked on every request.
 - **Evidence.** Every decision, approval and admin action is appended to a hash-chained ledger
-  (`GET /v1/ledger/verify` detects tampering). The tip is signed at chained checkpoints with a dedicated ledger key,
-  and verification checks the ledger against every checkpoint, so recomputing all hashes after an edit is detected.
-  Optionally each checkpoint hash is timestamped by an RFC 3161 authority (`AEGIS_TSA_URL`); only hashes leave.
+  (`GET /v1/ledger/verify` detects tampering).
 
 The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for Agentic Applications.
 
@@ -58,8 +56,34 @@ The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for 
 - **One identity per role** (`AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT=true`, set by the Keycloak env script): a sign-in whose
   token maps to more than one Aegis role is refused, so conflicting duties (registering and approving an agent,
   authoring and approving policy) cannot sit on one login. Aegis still checks separation of duties per action on top of
-  this. Limits: the rule counts roles, not people, so one human who is given two accounts can still use both; the
-  organisation must issue accounts per duty and review who holds which. It does not apply to the passwordless dev IdP.
+  this. It does not apply to the passwordless dev IdP.
+- **One person, many accounts** (`AEGIS_OIDC_PERSON_CLAIM`, `AEGIS_PERSON_LINKS`): every separation-of-duties check
+  (registrant/owner cannot approve an agent, the initiator or an owner cannot approve an action, a policy's author cannot
+  review or activate it) compares the *person* behind an account, not the username, so one human's role accounts cannot be
+  used to approve their own work. An account's person comes from the trusted `AEGIS_PERSON_LINKS` directory (JSON
+  `{"account": "person"}`, wins), else from the token claim named by `AEGIS_OIDC_PERSON_CLAIM` (for example
+  `employee_id`), else it is the account name alone. When the claim is configured, a staff login without it (and without a
+  link) is refused, because it could not be tied to a person. Each sign-in records account → person, so a name stored on
+  a record (an agent's owner) resolves even when that person is not signed in; an owner who has never signed in and has no
+  link resolves to their own name only. The `keycloak_setup env` script sets `AEGIS_PERSON_LINKS` for the demo's role accounts.
+- **Ownership re-attestation** (`ownership.py`): owners must periodically confirm each active agent. Every confirmation is
+  the ledger entry `attestation.confirmed`, so "last attested" is provable from the tamper-evident ledger. A background job
+  (`AEGIS_ATTESTATION_INTERVAL_DAYS`, default 90; 0 = manual only) marks an agent due when its last confirmation or
+  activation is older than the interval and gives the owner `AEGIS_ATTESTATION_GRACE_DAYS` (default 14). An overdue agent
+  raises alert DET-14 once per due date; with `AEGIS_ATTESTATION_AUTO_ENFORCE=true` it is also suspended (default off, so a
+  person decides before a live agent stops). A new campaign never extends a deadline that is already running.
+  *Hand-over:* `POST /v1/agents/{id}/owner` moves an agent to a new owner (the current owner, a risk-approver or an admin);
+  it clears the orphaned flag, starts the grace period for the new owner, and is recorded as `agent.owner_reassigned`.
+  The new owner must not have left, may not be the same person as the old owner, and a person cannot make themselves the
+  owner (SOD-004). A leaver orphans their suspended agents as well as their active ones. Limits: the job runs in every
+  control-plane process (a pass is idempotent, so a second process only repeats work); it does not start on an in-memory
+  database (use `POST /v1/attestations/run`); a leaver is matched by exact owner name, so only the dev IdP can mark a
+  person as having left (with SSO, report them with `POST /v1/idp-events/leaver`).
+- **Agents are managed only by their owner:** suspend, modify, submit, retire and attest act on an agent only for its
+  owner (under any of their accounts). The `agent-owner` role alone grants nothing over other people's agents. The
+  exceptions are deliberate: `soc-analyst` and `risk-approver` can suspend any agent (the kill switch must not wait for an
+  owner), `admin` can modify, submit and retire any agent, and the registrant can modify and submit the agent they
+  registered (changes to an active agent still force re-approval). Denials return `OWN-001`.
 - **Local signing keys** persist in the protected `.local/keys` folder for the PostgreSQL console. Test keys are
   ephemeral. Neither approach is a production key store; use Azure Key Vault in a shared environment.
   - *Explicit creation, strict startup.* Persistent keys are created once, out of band, with
@@ -93,11 +117,31 @@ from the protected, Git-ignored `connection.json`. Do not expose the passwordles
 
 ## Policy, investigation and telemetry safeguards
 
-Policy configurations are immutable through the API. Replay precedes submission, a different person approves,
+Policy versions are immutable through the API. Replay precedes submission, a different person approves,
 and activation checks the expected current version. Configuration/evaluator hashes must match before use.
 An independent approver may reject a submitted proposal with a required justification; it cannot then activate.
-Supported configuration changes apply to every policy engine (Python mirror, Rego via regopy, OPA); Rego source
-is not edited through the console.
+
+**Rego is part of the version** (`policy_bundles`, hash-verified on every load). The `rego` / `opa` engines evaluate
+the active version's stored Rego, so a file edit, a bad deploy or a tampered checkout cannot change a running decision;
+it only shows up as "the repository differs". A proposed rule change must pass `rules_check.py` before it is saved:
+module names and sizes are bounded, every runtime module must be in package `aegis.tool_call` (so a policy module can
+never declare a `system.*` package, which OPA treats as server configuration), network, introspection and
+non-deterministic builtins are refused anywhere in the text (comments included, so a comment-stripping bug cannot let
+one through), it must compile and return a well-formed verdict, and every test case must still pass. A rule change
+always needs a security sign-off (`security-approver`) in addition to the policy approval, from a different person than
+both the author and the policy approver (`SEC-001` blocks activation until then); so does a configuration change whose
+replay shows any decision becoming more permissive (a higher decision, less redaction or a looser rate limit). Replay
+covers recorded traffic only, which is why rule changes need the sign-off regardless of what replay found. Rollback
+returns to a version that was fully approved when it ran and needs no new sign-off. Limits: proposed Rego is compiled
+and evaluated in the control-plane process (regopy) by people holding `policy-author`; size limits bound it, but treat
+that role as privileged. The python engine is a fixed mirror and accepts configuration changes only.
+
+**Pushing to OPA** (`AEGIS_OPA_PUSH_POLICY`, default on): on activation and rollback Aegis replaces OPA's modules
+through its policy API (unknown modules removed first, OPA's compiler checks each write) and verifies the result before
+committing; if OPA refuses, the previous Rego is put back and nothing is activated. At start-up it pushes the active
+version, and it restores an OPA that restarted empty. It never silently overwrites an OPA that runs other Rego: that
+fails closed until a policy approver, security approver or admin calls `POST /v1/policies/opa/sync` (recorded in the
+ledger). Run OPA so that only the control plane can write to its policy API.
 
 **Policy decision point, fail closed.** Any engine error, timeout (`AEGIS_OPA_TIMEOUT_SECONDS`, whole request),
 unexpected answer (unknown decision or obligation, a deny without a reason) or an OPA that runs different Rego than
@@ -118,10 +162,9 @@ Replay evaluates recorded context only, without invoking tools, payment executio
 SOC assignments must name active analysts. Case transitions are validated; resolution/false-positive status
 requires a note. Notes and evidence links are appended to the audit ledger. PostgreSQL triggers reject direct
 UPDATE/DELETE of ledger and case-event rows, and transaction-scoped advisory locks serialize ledger appends.
-Database-owner/admin privileges can bypass those triggers, but not the signed checkpoints: a rewritten history no
-longer matches them unless the ledger signing key itself is also stolen. Keep that key in an HSM-backed Key Vault in
-production, and configure a timestamp authority so checkpoints are also witnessed outside Aegis. Deleting the most
-recent checkpoints is detectable only against an earlier exported pack or the authority's tokens.
+Database-owner/admin privileges can bypass those triggers, but not the signed evidence checkpoints: a rewritten
+history no longer matches them unless the evidence key itself is also stolen. Keep that key in an HSM-backed Key
+Vault in production. Deleting the most recent checkpoints is detectable only against an earlier exported pack.
 
 Adaptive risk uses recorded decisions and alerts, with a documented warm-up and active-minute median/MAD
 baseline. No training history or scores are fabricated. Effective enforcement cannot reduce inherent risk.

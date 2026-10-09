@@ -229,7 +229,7 @@ export function LineagePage() {
       ) : !tasks.data?.length ? (
         <Card>
           <EmptyState icon={GitFork} title="No tasks yet">
-            Run scene S2 from Demo Studio to create a governed task with a delegation.
+            Ask Bank Assistant to check document D-77 to create a governed task with a KYC delegation.
           </EmptyState>
         </Card>
       ) : (

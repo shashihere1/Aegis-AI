@@ -8,15 +8,20 @@ import asyncio
 import logging
 import os
 import secrets
-from pathlib import Path
 
 import uvicorn
 
 from aegis.common.settings import Settings
-from aegis_demo.world import FAKE_LLM_URL, running_world
+from aegis_demo.world import running_world
+
+
+def startup_error(exc: BaseException) -> str:
+    """The underlying reasons, not 'unhandled errors in a TaskGroup'."""
+    if isinstance(exc, BaseExceptionGroup):
+        return "; ".join(startup_error(inner) for inner in exc.exceptions)
+    return f"{type(exc).__name__}: {exc}"
 
 DEFAULT_DISCOVERY_SCAN_INTERVAL = 300  # the console scans the identity provider every 5 minutes unless configured
-DEFAULT_LEDGER_CHECKPOINT_INTERVAL = 60  # and signs the ledger tip every minute when there are new entries
 
 
 class DemoServer:
@@ -38,18 +43,13 @@ class DemoServer:
             sign_in = {
                 k: v
                 for k, v in from_env.items()
-                if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_", "tsa_"))
-                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine", "discovery_scan_interval",
-                         "ledger_checkpoint_interval"}
+                if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_"))
+                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine", "person_links",
+                         "discovery_scan_interval"}
             }
             overrides = sign_in if self.ephemeral else from_env
             if "discovery_scan_interval" not in env.model_fields_set:
                 overrides["discovery_scan_interval"] = DEFAULT_DISCOVERY_SCAN_INTERVAL
-            if "ledger_checkpoint_interval" not in env.model_fields_set:
-                overrides["ledger_checkpoint_interval"] = DEFAULT_LEDGER_CHECKPOINT_INTERVAL
-            if not overrides.get("ledger_signing_key_path") and overrides.get("signing_key_path"):
-                # Older .local/connection.json files predate the ledger key: keep it beside the other persistent keys.
-                overrides["ledger_signing_key_path"] = str(Path(overrides["signing_key_path"]).with_name("ledger.pem"))
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):
                 raise RuntimeError(
                     "Run deployment/local-postgres.ps1 first, or explicitly use --ephemeral for a disposable test demo"
@@ -59,9 +59,7 @@ class DemoServer:
             )
             if self.sso_password:
                 overrides.update(builtin_oidc=True, builtin_oidc_password=self.sso_password)
-            if not overrides.get("azure_openai_endpoint") and not overrides.get("llm_upstream_url"):
-                overrides["llm_upstream_url"] = FAKE_LLM_URL
-            async with running_world(seed=1244, **overrides) as world:
+            async with running_world(**overrides) as world:
                 ready.set_result(world)
                 await self._stop.wait()
         except Exception as exc:
@@ -76,7 +74,12 @@ class DemoServer:
                 if message["type"] == "lifespan.startup":
                     ready = asyncio.get_running_loop().create_future()
                     self._task = asyncio.create_task(self._own(ready))
-                    self.world = await ready
+                    try:
+                        self.world = await ready
+                    except Exception as exc:
+                        # Tell uvicorn the start failed so it stops, instead of serving requests with no world.
+                        await send({"type": "lifespan.startup.failed", "message": startup_error(exc)})
+                        return
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
                     self._stop.set()

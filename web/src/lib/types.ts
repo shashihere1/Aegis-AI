@@ -245,40 +245,54 @@ export interface LedgerVerify {
   entries: number;
   tip?: string;
   broken_at_seq?: number;
-  checkpoint?: number;
-  at_seq?: number;
-  reason?: string;
-  checkpoints?: number;
-  signed_upto_seq?: number | null;
-  unsigned_tail?: number;
-  anchored?: number;
 }
 
 export interface EvidenceSummary {
   generated_at: string;
   source: string;
   integrity: LedgerVerify;
-  counts: Record<"agents" | "mandates" | "decisions" | "approvals" | "alerts" | "ledger" | "checkpoints", number>;
+  counts: Record<"agents" | "mandates" | "decisions" | "approvals" | "alerts" | "ledger", number>;
+  period: { from: string; to: string; start: string; end_exclusive: string; timezone: string };
+  scope: { agent_id: string | null; root_id: string | null; framework: string; context: string; proof_mode: string };
+  evidence_key: { fingerprint: string; mode: string };
+  automation: { enabled: boolean; persistent_key: boolean; check_seconds: number };
+  coverage: EvidenceControl[];
+  executive_summary: string;
 }
 
-export interface LedgerCheckpoint {
-  number: number;
-  created_at: string;
-  upto_seq: number;
-  entries: number;
-  tip: string;
+export interface EvidenceControl {
+  id: string;
+  title: string;
+  status: string;
+  observed_records: number;
+  limitations: string;
+  references: { framework: string; name: string; reference: string; source_url: string }[];
+  sources: { file: string; count: number; query: string; filters: { event_type_prefixes?: string[] }; record_ids: (string | number)[] }[];
+}
+
+export interface EvidenceReport {
+  id: string;
+  schedule_id: string | null;
+  generated_by: string;
+  generated_at: string;
+  status: "ready" | "failed";
+  sha256: string;
   key_fingerprint: string;
-  anchor_status: "not_configured" | "pending" | "anchored";
-  anchored_at: string | null;
-  tsa_signer: string | null;
-  anchor_error: string | null;
+  error_code: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  summary: Partial<EvidenceSummary>;
 }
 
-export interface LedgerCheckpoints {
-  key: { fingerprint: string; persistent: boolean };
-  interval_seconds: number;
-  anchoring: { configured: boolean; tsa_url: string | null };
-  checkpoints: LedgerCheckpoint[];
+export interface EvidenceSchedule {
+  id: string;
+  name: string;
+  created_by: string;
+  scope: { agent_id?: string | null; root_id?: string | null; framework: string };
+  interval_hours: number;
+  enabled: boolean;
+  next_run_at: string;
 }
 
 export interface Usage {
@@ -316,9 +330,26 @@ export interface SocSummary {
 export interface Policies {
   engine: string;
   version: string;
-  files: Record<string, string>;
+  files: Record<string, string>; // the Rego the active version runs
   rules: { rule: string; effect: string; message: string }[];
   data: Record<string, unknown>;
+  editing: "configuration-only" | "configuration-and-rules";
+  rules_recorded: boolean;
+}
+
+export interface RulesCheck {
+  passed: boolean;
+  skipped?: string;
+  problems?: string[];
+  cases?: { total: number; passed: number; failed: { name: string; problem: string }[] };
+}
+
+export interface PolicyDiff {
+  version: string;
+  against: string;
+  rules: { file: string; status: string; added_lines: number; removed_lines: number; diff: string }[];
+  configuration: { path: string; before: unknown; after: unknown }[];
+  cases: { before: number; after: number; changed: boolean };
 }
 
 export interface GuardScan {
@@ -328,32 +359,6 @@ export interface GuardScan {
   pii: { entity: string; text: string }[];
   pii_count: number;
   redacted: string;
-}
-
-export interface StudioStep {
-  label: string;
-  status: "ok" | "denied" | "waiting" | "alert";
-  detail: string;
-  at: string;
-}
-
-export interface StudioRun {
-  id: string;
-  key: string;
-  title: string;
-  scene: string;
-  status: "running" | "waiting" | "completed" | "contained" | "blocked";
-  started_at: string;
-  steps: StudioStep[];
-  links: { root_id?: string; approval_id?: string; alert_ids?: string[] };
-}
-
-export interface StudioStatus {
-  agents: Record<string, { id: string; status: string }>;
-  kyc_variant: string;
-  kyc_tool_status: Record<string, string>;
-  emails_sent: number;
-  transfers: { payment_id: string; amount: number; creditor_iban: string }[];
 }
 
 export type DiscoverySourceState = "active" | "scheduled" | "manual" | "planned";
@@ -377,6 +382,18 @@ export interface IdentityStatus {
   issuer: string;
   detail?: string;
   agents_with_identity: number;
+}
+
+export interface AttestationStatus {
+  interval_days: number;
+  grace_days: number;
+  auto_enforce: boolean;
+  scheduler_running: boolean;
+  active_agents: number;
+  due: number;
+  overdue: number;
+  orphaned: number;
+  next_due: string | null;
 }
 
 export interface ReconcileReport {

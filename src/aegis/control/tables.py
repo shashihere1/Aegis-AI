@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -12,6 +12,37 @@ def utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class EvidenceSchedule(Base):
+    __tablename__ = "evidence_schedules"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    created_by: Mapped[str] = mapped_column(String(120))
+    scope: Mapped[dict] = mapped_column(JSON)
+    interval_hours: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EvidenceReport(Base):
+    __tablename__ = "evidence_reports"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    job_key: Mapped[str] = mapped_column(String(160), unique=True)
+    schedule_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    generated_by: Mapped[str] = mapped_column(String(120))
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    scope: Mapped[dict] = mapped_column(JSON)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    key_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    artifact: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class LlmReservation(Base):
@@ -85,6 +116,15 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PersonLink(Base):
+    """Which real person a sign-in name belongs to, recorded at sign-in so separation of duties can compare people."""
+
+    __tablename__ = "person_links"
+    username: Mapped[str] = mapped_column(String(255), primary_key=True)  # case-folded
+    person_id: Mapped[str] = mapped_column(String(255), index=True)  # case-folded
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class McpServer(Base):
@@ -227,26 +267,16 @@ class LedgerEntry(Base):
 
 
 class LedgerCheckpoint(Base):
-    """A signed statement of the ledger tip at an entry number; optionally timestamped by an RFC 3161 TSA."""
+    """A signed statement "the ledger had `entries` entries ending in `tip`", kept so a later rewrite is provable."""
 
     __tablename__ = "ledger_checkpoints"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    number: Mapped[int] = mapped_column(Integer, unique=True)
-    created_at: Mapped[str] = mapped_column(String(40))
-    upto_seq: Mapped[int] = mapped_column(Integer)
     entries: Mapped[int] = mapped_column(Integer)
     tip: Mapped[str] = mapped_column(String(64))
-    prev: Mapped[str] = mapped_column(String(64))  # SHA-256 of the previous checkpoint's JWS
+    ts: Mapped[str] = mapped_column(String(40))
+    signed_by: Mapped[str] = mapped_column(String(120))
     key_fingerprint: Mapped[str] = mapped_column(String(64))
-    public_pem: Mapped[str] = mapped_column(Text)
     jws: Mapped[str] = mapped_column(Text)
-    anchor_status: Mapped[str] = mapped_column(String(16))  # not_configured | pending | anchored
-    tsa_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    tsa_response: Mapped[str | None] = mapped_column(Text, nullable=True)  # base64 DER TimeStampResp
-    anchored_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    tsa_signer: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    anchor_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    anchor_attempts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class PolicyVersion(Base):
@@ -263,6 +293,24 @@ class PolicyVersion(Base):
     simulation: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PolicyBundle(Base):
+    """The Rego and test cases of one policy version. Immutable once written: the engines run these exact modules,
+    never whatever is on disk, so a file edit cannot change a running policy without an approved version."""
+
+    __tablename__ = "policy_bundles"
+    version_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    modules: Mapped[dict] = mapped_column(JSON)  # file name -> Rego text (line endings normalised)
+    cases: Mapped[list] = mapped_column(JSON, default=list)  # expected decisions the Rego must keep producing
+    bundle_hash: Mapped[str] = mapped_column(String(64))  # sha256 of modules and cases
+    origin: Mapped[str] = mapped_column(String(20))  # repository | inherited | edited | backfilled
+    base_version: Mapped[str | None] = mapped_column(String(40), nullable=True)  # active version when drafted
+    checks: Mapped[dict] = mapped_column(JSON, default=dict)  # the automatic checks' report
+    security_approver: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    security_justification: Mapped[str] = mapped_column(Text, default="")
+    security_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PolicyState(Base):

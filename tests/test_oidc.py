@@ -21,7 +21,7 @@ from aegis.control.identity import oidc as oidc_module
 from aegis.control.identity.idp import DevIdp, Persona
 from aegis.control.identity.oidc import IdentityUnavailable, OidcConfig, OidcVerifier
 from aegis.control.identity.users import UserAuthenticator
-from aegis_demo.world import BASE, FAKE_LLM_URL, running_world
+from aegis_demo.testing import BASE, FAKE_LLM_URL, running_world
 
 ISSUER = "https://idp.example.test/realms/aegis"
 CLIENT = "aegis-console"

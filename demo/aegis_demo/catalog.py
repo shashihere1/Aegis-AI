@@ -96,6 +96,8 @@ PERSONAS = [
     ("sanne.bakker", "Sanne Bakker", ["risk-approver"], []),
     ("mark.jansen", "Mark Jansen", ["soc-analyst"], []),
     ("fatima.elamrani", "Fatima El Amrani", ["security-approver", "policy-approver"], []),
+    # A second security approver: a rule change needs a policy approval AND a security sign-off from two people.
+    ("lars.devos", "Lars de Vos", ["security-approver"], []),
     ("eva.visser", "Eva Visser", ["auditor"], []),
     ("admin", "Platform Admin", ["admin"], []),
 ]

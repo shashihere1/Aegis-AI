@@ -125,6 +125,8 @@ class BuiltinOidc:
             "roles": persona.roles,
             "entitlements": persona.entitlements,
         }
+        if persona.person_id:
+            claims["person_id"] = persona.person_id
         if id_token:
             claims["nonce"] = nonce
             claims["auth_time"] = now

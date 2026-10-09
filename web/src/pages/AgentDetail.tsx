@@ -271,7 +271,7 @@ export function AgentDetail() {
         <Card title="Recent decisions" className="xl:col-span-3">
           {!decisions.data?.length ? (
             <EmptyState icon={ShieldAlert} title="No decisions yet">
-              Run a scene from Demo Studio to see this agent act.
+              Start a Bank Assistant task or an Investigation Copilot query to see this agent act.
             </EmptyState>
           ) : (
             <table className="w-full">

@@ -32,6 +32,8 @@ class Persona:
     entitlements: list[str] = field(default_factory=list)
     status: str = "active"  # active | left
     manager: str | None = None
+    # The real person behind this account. Two accounts of one person share it; None means "this username only".
+    person_id: str | None = None
 
 
 @dataclass

@@ -161,7 +161,7 @@ export function ShadowAgents() {
           <Loading />
         ) : !list.length ? (
           <EmptyState icon={Radar} title="No shadow agents found yet">
-            Run scene S5 from Demo Studio, or call any MCP server through the Gateway without a Mandate.
+            Discovery findings come from identity scans and requests to the Gateway without a valid Mandate.
           </EmptyState>
         ) : (
           <ul className="divide-y divide-line">

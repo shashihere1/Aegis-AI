@@ -129,7 +129,7 @@ export function ActivityFeed() {
           <Loading />
         ) : !list.data?.length ? (
           <EmptyState icon={Activity} title="No activity yet">
-            Run a scene from the Demo Studio button (bottom right) to see decisions stream in.
+            Start a Bank Assistant task to see authorized tool decisions stream in.
           </EmptyState>
         ) : (
           <DecisionTable rows={list.data} fresh={fresh} />

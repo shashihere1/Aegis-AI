@@ -13,7 +13,7 @@ from test_governance import test_policy_changes_replay_approval_activation_and_r
 
 from aegis.policy.engines import forget_opa_verification, rego_available
 from aegis_demo import data, mcp_servers
-from aegis_demo.world import BASE, FAKE_LLM_URL, running_world
+from aegis_demo.testing import BASE, FAKE_LLM_URL, running_world
 
 pytestmark = pytest.mark.skipif(not rego_available(), reason="regopy not installed")
 _CUSTOMERS = copy.deepcopy(data.CUSTOMERS)

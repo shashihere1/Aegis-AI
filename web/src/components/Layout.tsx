@@ -25,7 +25,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   Siren,
-  Sparkles,
   Sun,
   TriangleAlert,
   type LucideIcon,
@@ -35,7 +34,6 @@ import { useAlerts, useFindings, usePendingApprovals, useStats } from "../lib/qu
 import { useSession } from "../lib/session";
 import type { AgentPage } from "../lib/types";
 import { Avatar, cx } from "./ui";
-import { StudioLauncher } from "./StudioLauncher";
 import { CopilotLauncher } from "../pages/Copilot";
 
 interface NavItem {
@@ -89,7 +87,6 @@ function useNav(): { section: string; items: NavItem[] }[] {
       section: "Assurance",
       items: [
         { to: "/evidence", label: "Audit Ledger", icon: ShieldCheck },
-        { to: "/studio", label: "Demo Studio", icon: Sparkles },
         { to: "/assistant", label: "Bank Assistant", icon: MessageSquare },
       ],
     },
@@ -369,7 +366,6 @@ const TITLES: Record<string, string> = {
   tools: "MCP Servers & Tools",
   policies: "Policy Governance",
   evidence: "Audit Ledger",
-  studio: "Demo Studio",
   assistant: "Bank Assistant",
 };
 
@@ -449,7 +445,7 @@ export function Layout() {
         </main>
       </div>
       {!customer && <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />}
-      {!customer && section !== "copilot" && (can("soc-analyst", "auditor") ? <CopilotLauncher key={persona?.username} /> : <StudioLauncher />)}
+      {!customer && section !== "copilot" && can("soc-analyst", "auditor") && <CopilotLauncher key={persona?.username} />}
     </div>
   );
 }

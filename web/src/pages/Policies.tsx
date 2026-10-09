@@ -24,7 +24,7 @@ export function PoliciesPage() {
       <PageHeader
         icon={BookLock}
         title="Policy Governance"
-        subtitle="Versioned configuration, independent approval, historical replay and rollback."
+        subtitle="Versioned configuration and Rego, automatic checks, independent approval, historical replay and rollback."
         actions={<Chip mono>{p.version}</Chip>}
       />
       <PolicyGovernance policy={p} />
@@ -70,12 +70,13 @@ export function PoliciesPage() {
             <div className="p-5">
               <JsonBlock value={p.data} />
               <p className="mt-3 text-xs text-faint">
-                Combination: deny, needs approval, then allow with obligations. Default deny. The current local runtime is the Python evaluator; Rego is displayed as reference source, not executed here.
+                Combination: deny, needs approval, then allow with obligations. Default deny.{" "}
+                {p.engine === "python" ? "This runtime is the Python evaluator, a mirror of the Rego shown here." : `The ${p.engine} engine evaluates exactly the Rego shown here, from the active version.`}
               </p>
             </div>
           </Card>
         </div>
-        <Card title="Checked-in reference source (read-only)" action={<Tabs value={file} onChange={setFile} tabs={Object.keys(p.files).map((f) => ({ value: f, label: f }))} />}>
+        <Card title={p.rules_recorded ? `Active Rego · version ${p.version} (read-only)` : "Repository Rego (read-only)"} action={<Tabs value={file} onChange={setFile} tabs={Object.keys(p.files).map((f) => ({ value: f, label: f }))} />}>
           <pre className="max-h-[calc(100vh-15rem)] overflow-auto p-5 font-mono text-xs leading-relaxed">
             {source.split("\n").map((line, i) => (
               <div key={i} className="flex">

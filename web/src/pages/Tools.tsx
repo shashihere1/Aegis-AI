@@ -30,14 +30,16 @@ export function Tools() {
   });
 
   if (servers.isLoading || tools.isLoading) return <Loading />;
-  const all = tools.data ?? [];
+  const activeServers = (servers.data ?? []).filter(s => s.status === "active");
+  const activeIds = new Set(activeServers.map(s => s.id));
+  const all = (tools.data ?? []).filter(t => activeIds.has(t.server_id));
   const shown = server ? all.filter((t) => t.server_id === server) : all;
 
   return (
     <>
       <PageHeader icon={Plug} title="MCP Servers & Tools" subtitle="Every tool an agent can reach: classified by its owner, pinned at approval, quarantined on drift" />
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 2xl:grid-cols-7">
-        {(servers.data ?? []).map((s) => {
+        {activeServers.map((s) => {
           const ts = all.filter((t) => t.server_id === s.id);
           const bad = ts.filter((t) => t.status !== "approved").length;
           return (

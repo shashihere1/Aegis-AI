@@ -10,7 +10,8 @@ step an operator runs once:
 Only public-key fingerprints are ever printed or logged; private key material never leaves disk.
 
 Backup and recovery (local PostgreSQL console):
-  - Back up the files at AEGIS_SIGNING_KEY_PATH and AEGIS_IDP_KEY_PATH (default .local/keys/*.pem)
+  - Back up the files at AEGIS_SIGNING_KEY_PATH, AEGIS_IDP_KEY_PATH and AEGIS_EVIDENCE_KEY_PATH
+    (default .local/keys/*.pem; the evidence key defaults to evidence.pem beside the STS key)
     to an encrypted, access-controlled location. They are the signing identity: losing them
     invalidates every already-issued token and breaks evidence verification.
   - To recover, restore the files to the same paths and run `python -m aegis.keys show`; the
@@ -31,7 +32,7 @@ from aegis.common.settings import Settings
 KEY_ROLES = (
     ("sts", "signing_key_path", "sts-1"),
     ("idp", "idp_key_path", "idp-1"),
-    ("ledger", "ledger_signing_key_path", "ledger-1"),
+    ("evidence", "evidence_key_file", "evidence-1"),  # signs ledger checkpoints and evidence packs
 )
 
 
@@ -59,7 +60,7 @@ def provision(settings: Settings, *, create: bool) -> dict[str, dict[str, str]]:
 def _print(report: dict[str, dict[str, str]]) -> None:
     for role, info in report.items():
         print(
-            f"{role:6}  {info['mode']:10}  kid={info['kid']:8}  "
+            f"{role:8}  {info['mode']:10}  kid={info['kid']:10}  "
             f"fingerprint={info['fingerprint']}  {info['path']}"
         )
 

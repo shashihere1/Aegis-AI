@@ -11,11 +11,13 @@ import subprocess
 import pytest
 from policy_cases import (
     CASES,
+    CASES_FILE,
     POLICY_DIR,
     REGO_STRICTER,
     REGO_TEST_FILE,
     expected_obligation_types,
     python_inputs,
+    render_cases_json,
     render_rego_tests,
 )
 
@@ -87,6 +89,12 @@ def test_amount_given_as_text_cannot_skip_approval_in_any_engine():
 def test_generated_rego_unit_tests_are_up_to_date():
     assert REGO_TEST_FILE.read_text(encoding="utf-8") == render_rego_tests(expected_obligation_types()), (
         "config/policies/tool_call_test.rego is stale: run  python tests/policy_cases.py --write"
+    )
+
+
+def test_generated_policy_cases_are_up_to_date():
+    assert CASES_FILE.read_text(encoding="utf-8") == render_cases_json(expected_obligation_types()), (
+        "config/policy_tests/tool_call_cases.json is stale: run  python tests/policy_cases.py --write"
     )
 
 
