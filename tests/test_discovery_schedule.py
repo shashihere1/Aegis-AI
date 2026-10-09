@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from aegis.common.settings import Settings
 from aegis.control import discovery
 from aegis.control.identity.oidc import IdentityUnavailable
-from aegis_demo.world import FAKE_LLM_URL, running_world
+from aegis_demo.testing import FAKE_LLM_URL, running_world
 
 
 @asynccontextmanager
