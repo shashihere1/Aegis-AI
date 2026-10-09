@@ -59,7 +59,7 @@ export function SocDashboard() {
           <div className="p-5">
             {s.decisions === 0 ? (
               <EmptyState icon={MonitorDot} title="No decisions in this window">
-                Run a scene from Demo Studio to generate governed traffic.
+                Start a Bank Assistant task to generate governed traffic.
               </EmptyState>
             ) : view === "chart" ? (
               <>

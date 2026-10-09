@@ -8,7 +8,7 @@ import pytest
 from aegis.common.settings import Settings
 from aegis.gateway.llm import AzureChatUpstream, LlmError, azure_chat_url, bounded_chat, completion_usage
 from aegis_demo.llm_smoke import local_base_url
-from aegis_demo.world import BASE
+from aegis_demo.testing import BASE
 
 ENDPOINT = "https://test-resource.openai.azure.com"
 CHAT = {"messages": [{"role": "user", "content": "A synthetic question."}], "max_tokens": 128}
@@ -155,7 +155,7 @@ async def test_smoke_api_requires_auth_and_refuses_the_fake_model(world):
 
 @pytest.mark.parametrize("upstream_status", [200, 401])
 async def test_smoke_call_records_usage_only_on_success_and_always_completes(upstream_status):
-    from aegis_demo.world import FAKE_LLM_URL, running_world
+    from aegis_demo.testing import FAKE_LLM_URL, running_world
 
     config = settings().model_dump()
     # Including an offline upstream proves that configured Azure takes precedence, with no fake fallback.

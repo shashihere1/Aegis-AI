@@ -1,3 +1,7 @@
+> Offline security-fixture specification only. Scripted Studio routes and its UI are removed from the normal
+> application. Use Bank Assistant and Investigation Copilot for the live demonstration; the automated tests
+> retain these deterministic attack fixtures. See README for persistent banking and the upgrade workflow.
+
 # Demo flow
 
 Run `python -m aegis_demo.run` for the narrated version of scenes S0–S5 and a ledger-only S8 (output:

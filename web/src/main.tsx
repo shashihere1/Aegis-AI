@@ -22,7 +22,6 @@ import { Approvals } from "./pages/Approvals";
 import { Tools } from "./pages/Tools";
 import { PoliciesPage } from "./pages/Policies";
 import { Evidence } from "./pages/Evidence";
-import { Studio } from "./pages/Studio";
 import { SignIn } from "./pages/SignIn";
 import { AuthCallback } from "./pages/AuthCallback";
 import { BankAssistant } from "./pages/BankAssistant";
@@ -62,8 +61,8 @@ const router = createBrowserRouter(
         { path: "tools", element: <Tools /> },
         { path: "policies", element: <PoliciesPage /> },
         { path: "evidence", element: <Evidence /> },
-        { path: "studio", element: <Studio /> },
         { path: "assistant", element: <BankAssistant /> },
+        { path: "studio", element: <Navigate to="/assistant" replace /> },
         { path: "copilot", element: <Copilot /> },
         { path: "*", element: <Navigate to="/agents" replace /> },
       ],

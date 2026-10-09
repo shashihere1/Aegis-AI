@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { api, post } from "../lib/api";
 import {
-  BANK_TASKS, OPEN_BANK_STATUSES, bankReceipt, bankRunStats, bankStatusLabel, eventEstimate, record,
+  BANK_TASKS, OPEN_BANK_STATUSES, bankReceipt, bankRunStats, bankStatusLabel, eventEstimate, lacksChangeReceipt, record,
   type BankEvent, type BankMode, type BankRun, type BankStatus,
 } from "../lib/bank-assistant";
 import { euro, titleCase } from "../lib/format";
@@ -19,10 +19,39 @@ const TASK_ICONS: Record<BankMode, LucideIcon> = {
   inquiry: Wallet, documents: FileCheck2, address: MapPin, transfer: ArrowUpRight,
 };
 
+type AccountSnapshot = {
+  balance_eur: number; address: string; storage: string;
+  payments: { payment_id: string; amount: number; status: string; reference: string; created_at: string }[];
+};
+
+function SandboxAccount({ enabled }: { enabled: boolean }) {
+  const { persona } = useSession();
+  const account = useQuery({ queryKey: ["sandbox-account", persona?.username], enabled,
+    queryFn: () => api<AccountSnapshot>("/demo/api/bank/account"), refetchInterval: 4000 });
+  if (!enabled) return null;
+  return <Card title="Your synthetic sandbox account" className="mb-5" action={<Pill>Database view · no Azure call</Pill>}>
+    {account.isPending ? <Spinner /> : account.isError ? <p role="alert" className="text-sm text-critical-ink">The account database is unavailable. No cached balance is shown as current.</p>
+      : account.data && <>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div><p className="text-xs text-muted">Current stored balance</p><p className="mt-1 text-2xl font-semibold tabular-nums">{euro(account.data.balance_eur)}</p></div>
+          <div className="text-sm"><Pill>{account.data.storage}</Pill><p className="mt-2 max-w-lg text-muted">{account.data.address}</p></div>
+        </div>
+        <p className="mt-3 text-xs text-faint">Only an authorized transfer changes this balance. Confirmation and approval alone do not. Synthetic funds only.</p>
+        <div className="mt-4 border-t border-line pt-3"><h3 className="text-sm font-medium">Recent committed payments</h3>
+          {!account.data.payments.length ? <p className="mt-2 text-sm text-muted">No payments yet. Records persist across server restarts.</p>
+            : <ul className="mt-2 divide-y divide-line">{account.data.payments.map(payment => <li key={payment.payment_id} className="flex flex-wrap justify-between gap-2 py-2 text-sm">
+              <div><span className="font-mono text-xs">{payment.payment_id}</span><p className="text-xs text-muted">{payment.reference || "No reference"} · {new Date(payment.created_at).toLocaleString()}</p></div>
+              <div className="text-right font-medium">{euro(payment.amount)}<p className="text-xs font-normal text-muted">Synthetic · {payment.status}</p></div>
+            </li>)}</ul>}
+        </div>
+      </>}
+  </Card>;
+}
+
 function RunStatus({ status }: { status: string }) {
   if (status === "running") return <Pill tone="info" icon={Clock3}>{bankStatusLabel(status)}</Pill>;
   if (status === "completed") return <Pill tone="good" icon={CheckCircle2}>{bankStatusLabel(status)}</Pill>;
-  if (["confirmation_required", "approval_required"].includes(status)) return <Pill tone="warning" icon={CircleHelp}>{bankStatusLabel(status)}</Pill>;
+  if (["confirmation_required", "approval_required", "not_executed", "uncertain"].includes(status)) return <Pill tone="warning" icon={CircleHelp}>{bankStatusLabel(status)}</Pill>;
   if (["failed", "denied", "blocked"].includes(status)) return <Pill tone="critical" icon={TriangleAlert}>{bankStatusLabel(status)}</Pill>;
   return <Pill icon={X}>{bankStatusLabel(status)}</Pill>;
 }
@@ -113,6 +142,11 @@ function RuntimeOverview({ status, loading }: { status?: BankStatus; loading: bo
       <div className="mt-3 flex flex-wrap gap-2">{Object.entries(status.frameworks).map(([name, version]) => <Pill key={name} tone={version ? "neutral" : "warning"}>{name}: {version ?? "missing"}</Pill>)}</div>
       <p className="mt-3 leading-relaxed text-muted">Per agent/day UTC · {budget.day_utc} · {budget.outstanding_holds} uncertain/in-flight budget holds. Estimates are not Azure invoices. OPA is not used for model controls. Configuration readiness does not prove Azure connectivity.</p>
     </details>
+    {!!status.bank_tools_requiring_review?.length && <div className="border-t border-warning/25 bg-warning/8 px-5 py-3 text-sm text-warning-ink">
+      <p className="font-medium">Banking tools need independent security review</p>
+      <p className="mt-1 text-xs">Updated definitions remain blocked until a security approver reviews and approves them in MCP Servers &amp; Tools. This does not bypass approval.</p>
+      <p className="mt-2 break-words font-mono text-xs">{status.bank_tools_requiring_review.join(" · ")}</p>
+    </div>}
     {!status.ready && <div className="flex items-start gap-2 border-t border-warning/25 bg-warning/8 px-5 py-3 text-sm text-warning-ink"><TriangleAlert className="mt-0.5 size-4 shrink-0" />
       <div>{status.policy_error || "Configure Azure and install requirements-agents.txt before starting a task."}<p className="mt-1 text-xs">See docs/live-agents.md. Processing geography must match the actual deployment, not just the resource region.</p></div></div>}
   </>;
@@ -186,7 +220,7 @@ export function BankAssistant() {
           <div className="flex flex-wrap items-center gap-2.5"><h2 className="text-lg font-semibold">{customer ? `Hi ${persona?.name.split(" ")[0] || "Jan"}, I'm Ava` : "Meet Ava, your banking assistant"}</h2>
             <Pill tone="accent">Synthetic bank</Pill><Pill tone="warning">Paid Azure requests</Pill></div>
           <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted">Check an account, verify a document, or review a change. Only use synthetic demo data; no real money moves.</p>
-          <p className="mt-1 text-xs leading-relaxed text-faint">Ava: LangGraph + Azure tool calling · KYC: Microsoft Agent Framework · Banking data: local fixtures.
+          <p className="mt-1 text-xs leading-relaxed text-faint">Ava: LangGraph + Azure tool calling · KYC: Microsoft Agent Framework · Banking data: persistent synthetic sandbox. Document checks are synthetic, not genuine KYC.
             {source === "dev" ? " Sign-in uses passwordless development personas, not enterprise IAM." : source === "sso" ? " You are signed in with SSO." : ""}</p>
         </div>
         {!customer && config?.dev_login && personas.some(item => item.username === "jan.devries" && item.status === "active")
@@ -200,6 +234,8 @@ export function BankAssistant() {
       <div className="min-w-0"><div className="text-sm font-semibold text-critical-ink">The request could not be completed</div>
         <p className="mt-1 break-words text-sm text-muted">{error.message}</p><p className="mt-2 text-xs text-muted">No automatic action retry. Review the run and any receipts before submitting a new write.</p></div>
     </div>}
+
+    <SandboxAccount enabled={customer} />
 
     <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.15fr)]">
       <div className="min-w-0 space-y-5">
@@ -243,7 +279,7 @@ export function BankAssistant() {
         <Card title={<span className="inline-flex items-center gap-2"><History className="size-4 text-muted" />Recent runs</span>} action={<span className="text-xs text-muted">{recent.length} recorded</span>}>
           {history.isPending ? <div className="flex items-center gap-2 p-5 text-sm text-muted"><Spinner />Loading run history…</div>
             : history.isError && !recent.length ? <div className="p-5 text-sm text-muted">Run history is temporarily unavailable.</div>
-            : !recent.length ? <EmptyState icon={History} title="No tasks yet">Your live-agent history will appear here. Scripted Studio scenes are tracked separately.</EmptyState>
+            : !recent.length ? <EmptyState icon={History} title="No tasks yet">Your live-agent history and verified tool receipts will appear here.</EmptyState>
             : <div className="p-2">
               <div className={cx("space-y-1", allHistory && "max-h-80 overflow-y-auto")}>
                 {(allHistory ? recent : recent.slice(0, 5)).map(item => {
@@ -277,12 +313,18 @@ export function BankAssistant() {
               <div><div className="text-[10px] text-muted">{stats.partialEstimate ? "Partial estimate" : "Task estimate"}</div><div className="mt-1 break-words text-sm font-semibold tabular">{stats.estimatedCost === null ? "—" : euro(stats.estimatedCost, 6)}</div></div>
             </div>}
 
+            {lacksChangeReceipt(run) && <div className="mt-5 rounded-xl border border-warning/40 bg-warning/5 p-4" role="status">
+              <div className="text-sm font-semibold text-warning-ink">No verified change receipt</div>
+              <p className="mt-2 text-xs leading-relaxed text-muted">This historical run is finished, but it has no successful transfer or address-change receipt. A model message asking “please confirm” is not a pending action, so there is no confirmation button for this run. Check the stored account and Activity before submitting another change.</p>
+            </div>}
+
             {run.status === "confirmation_required" && <div className="mt-5 rounded-xl border border-warning/40 bg-warning/5 p-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-warning-ink"><CircleHelp className="size-4" />Review before execution</div>
               <p className="mt-2 text-sm font-medium">{titleCase(run.pending.name || "Proposed action")}</p>
               <ProposedArguments value={run.pending.arguments} />
+              <p className="mb-2 text-xs font-medium text-warning-ink">Confirm using the button below, not by submitting another request or typing “yes”.</p>
               <p className="mb-3 text-xs leading-relaxed text-muted">This proposed action has not executed. Confirmation authorizes these exact stored arguments, not a rewritten model request.</p>
-              {canContinue && <Button icon={CheckCircle2} variant="primary" className="h-auto min-h-9 whitespace-normal py-2" loading={proceed.isPending} onClick={() => proceed.mutate("confirm")}>Confirm this synthetic action</Button>}
+              {canContinue && <Button icon={CheckCircle2} variant="primary" className="h-auto min-h-9 w-full whitespace-normal py-2" loading={proceed.isPending} onClick={() => proceed.mutate("confirm")}>Confirm this synthetic action</Button>}
               {!run.resumable && <p className="text-xs text-warning-ink">This stored run cannot resume. Check receipts before starting a new task.</p>}
               {!customer && <p className="text-xs text-muted">Only the initiating customer can confirm this action.</p>}
             </div>}

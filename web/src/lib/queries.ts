@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import type { AgentStats, Alert, Approval, Finding, SocSummary, StudioRun, StudioStatus, IdentityStatus } from "./types";
+import type { AgentStats, Alert, Approval, Finding, SocSummary, IdentityStatus } from "./types";
 
 // Shared, polled queries. Intervals are short because the console is the live view of the demo.
 
@@ -15,9 +15,7 @@ export const useAlerts = () => useQuery({ queryKey: ["alerts"], queryFn: () => a
 
 export const useFindings = () => useQuery({ queryKey: ["findings"], queryFn: () => api<Finding[]>("/v1/discovery/findings"), refetchInterval: 5000 });
 
-export const useRuns = () => useQuery({ queryKey: ["studio-runs"], queryFn: () => api<StudioRun[]>("/demo/api/runs"), refetchInterval: 1000 });
 
-export const useStudioStatus = () => useQuery({ queryKey: ["studio-status"], queryFn: () => api<StudioStatus>("/demo/api/status"), refetchInterval: 2500 });
 
 export function useIdentityStatus() {
   return useQuery({ queryKey: ["identity-status"], queryFn: () => api<IdentityStatus>("/v1/identity/status"), refetchInterval: 15000 });

@@ -71,7 +71,7 @@ export function PolicyGovernance({ policy }: { policy: Policies }) {
           <p>Replay: {report.evaluated} evaluated · {report.changed} changed · {report.skipped} skipped</p>
           <JsonBlock value={report.transitions} />
           <p className="text-xs text-faint">{report.limitations}</p>
-          {report.evaluated === 0 && <p className="text-warning-ink">No compatible traffic to replay. Run a Studio transfer first for meaningful evidence.</p>}
+          {report.evaluated === 0 && <p className="text-warning-ink">No compatible traffic to replay. Run a Bank Assistant transfer first for meaningful evidence.</p>}
           <ul className="max-h-60 space-y-2 overflow-auto text-xs">{report.results?.filter(r => r.changed).map(r => <li key={r.decision_id}>
             {r.action}: {r.before} → {r.after} ({r.decision_id})
             {r.changed_fields && <span className="ml-2 text-muted">Changed: {r.changed_fields.join(", ")}</span>}

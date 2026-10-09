@@ -1,4 +1,4 @@
-"""Runs the whole system in one process: control plane, Gateway, mock-bank MCP servers and demo agents.
+"""Runs the governance system, real agent runtimes and persistent synthetic bank in one process.
 
 Services talk over HTTP exactly as in a deployment, but requests are routed in-process through one
 ASGI app. The gateway has a separate client for explicitly configured Azure inference; local demo
@@ -28,6 +28,7 @@ from aegis.common.investigation import SERVER
 from aegis.common.models import AgentStatus
 from aegis.common.service_identity import mint_service_token
 from aegis.common.settings import REPO_ROOT, Settings
+from aegis.control import ledger
 from aegis.control.app import create_app
 from aegis.control.identity.agent_identity import IdentityNotFound
 from aegis.control.identity.idp import Persona
@@ -42,11 +43,11 @@ from aegis.telemetry import TraceMiddleware, tracing_headers
 from aegis_demo import catalog
 from aegis_demo.agent_api import interrupt_history
 from aegis_demo.agents import Ava, kyc_agent_app, payments_agent_app
+from aegis_demo.bank import Bank
+from aegis_demo.bank_mcp import apps as bank_apps
+from aegis_demo.console_api import console_app
 from aegis_demo.copilot import interrupt_copilot_history
 from aegis_demo.data import DOCUMENTS
-from aegis_demo.fake_llm import fake_llm_app
-from aegis_demo.mcp_servers import SERVERS
-from aegis_demo.studio import studio_app
 
 BASE = "http://127.0.0.1:8000"
 FAKE_LLM_URL = f"{BASE}/demo/fake-llm/v1"
@@ -101,6 +102,8 @@ class World:
     stack: AsyncExitStack
     kyc_app: FastAPI
     payments_app: FastAPI
+    bank: Bank | None = None
+    offline_fixtures: bool = False
     agent_ids: dict[str, str] = field(default_factory=dict)
     sdks: dict[str, AegisAgent] = field(default_factory=dict)
     ava: Ava | None = None
@@ -159,11 +162,28 @@ async def bootstrap(w: World) -> None:
         w.ctx.idp.add_persona(Persona(username, name, roles, entitlements))
 
     async with w.ctx.db.sessionmaker() as s:
+        if not w.offline_fixtures:
+            for server_id in ("notify", "fx-rates"):
+                old = await s.get(McpServer, server_id)
+                if old and old.url == f"{BASE}/demo/mcp/{server_id}/mcp" and old.status == "active":
+                    old.status = "retired"
+                    await ledger.append(s, "mcp.fixture_retired", "system:sandbox-migration", server_id,
+                                        {"reason": "Offline test fixture removed from normal application"})
+            await s.commit()
         existing_servers = set((await s.scalars(select(McpServer.id))).all())
         existing_agents = {a.name: a for a in (await s.scalars(select(Agent))).all()}
 
     for server_id in w.mounts:
         if server_id in existing_servers:
+            if not w.offline_fixtures:
+                async with w.ctx.db.sessionmaker() as s:
+                    existing_server = await s.get(McpServer, server_id)
+                    if existing_server.url != f"{BASE}/demo/mcp/{server_id}/mcp":
+                        raise RuntimeError(
+                            f"Reserved sandbox server {server_id} points elsewhere; review its registry URL."
+                        )
+                # Changed definitions are quarantined by the real import API. Never silently reapprove drift.
+                _ok(await w.api("priya.raman", "POST", f"/v1/mcp/servers/{server_id}/import"))
             continue
         vendor = "third-party" if server_id == "fx-rates" else "internal"
         _ok(
@@ -181,6 +201,8 @@ async def bootstrap(w: World) -> None:
         )
         _ok(await w.api("priya.raman", "POST", f"/v1/mcp/servers/{server_id}/import"))
     for tool_id, classification in catalog.TOOL_CLASSIFICATION.items():
+        if tool_id.split(".")[0] not in w.mounts:
+            continue
         if tool_id.split(".")[0] in existing_servers:
             continue
         _ok(await w.api("priya.raman", "PUT", f"/v1/tools/{tool_id}/classification", json=classification))
@@ -200,6 +222,13 @@ async def bootstrap(w: World) -> None:
             "cloud": "azure",
             "endpoint_url": endpoints.get(key),
         }
+        if not w.offline_fixtures:
+            body["environment"], body["cloud"] = "DEV", "on-prem"
+            body["capabilities"] = [cap for cap in manifest["capabilities"] if not cap.startswith("notify.")]
+            if key == "kyc-agent":
+                body["purpose"] = "Check stored synthetic document ownership, type and expiry; not genuine KYC."
+            elif key == "payments-agent":
+                body["purpose"] = "Execute governed transfers between synthetic sandbox accounts; no real settlement."
         w.agent_ids[key] = _ok(await w.api("priya.raman", "POST", "/v1/agents", json=body))["id"]
     ava = w.agent_ids["ava"]
     for key in ("kyc-agent", "payments-agent"):
@@ -245,7 +274,8 @@ async def bootstrap(w: World) -> None:
         )
     w.kyc_app.state.sdk = w.sdks["kyc-agent"]
     w.payments_app.state.sdk = w.sdks["payments-agent"]
-    w.ava = Ava(w.sdks["ava"], w.agent_ids["kyc-agent"], w.agent_ids["payments-agent"])
+    if w.offline_fixtures:
+        w.ava = Ava(w.sdks["ava"], w.agent_ids["kyc-agent"], w.agent_ids["payments-agent"])
 
 
 async def seed_registry(w: World, count: int) -> None:
@@ -313,7 +343,8 @@ async def seed_registry(w: World, count: int) -> None:
 
 
 @asynccontextmanager
-async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_routes=(), **overrides):
+async def running_world(seed: int = 0, *, offline_fixtures: bool = False,
+                        agent_identity_factory=None, extra_routes=(), **overrides):
     """Boot the whole demo in one process.
 
     `agent_identity_factory(settings, http)` may supply the agents' identity provider and `extra_routes` adds more
@@ -322,6 +353,9 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
     values = dict(
         control_url=BASE, gateway_url=f"{BASE}/gw", database_url="sqlite+aiosqlite:///:memory:", cache_seconds=0
     )
+    if not offline_fixtures and (seed or overrides.get("llm_upstream_url")):
+        raise ValueError("Seeded inventory and non-Azure LLMs are offline test fixtures only.")
+    overrides["bank_sandbox_enabled"] = not offline_fixtures
     # Trusted synthetic ownership directory, independent of any model-supplied identifiers.
     if not overrides.get("resource_owners"):
         overrides["resource_owners"] = {
@@ -358,9 +392,15 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
         telemetry=control.state.ctx.telemetry,
         service_key=gateway_service_key,
     )
-    servers = {name: factory().streamable_http_app() for name, factory in SERVERS.items()}
+    bank = None if offline_fixtures else Bank(control.state.ctx.db)
+    if offline_fixtures:
+        from aegis_demo.mcp_servers import SERVERS
+
+        servers = {name: factory().streamable_http_app() for name, factory in SERVERS.items()}
+    else:
+        servers = bank_apps(bank, settings.bank_sandbox_token)
     servers[SERVER] = investigation_app(control.state.ctx)
-    kyc_app, payments_app = kyc_agent_app(), payments_agent_app()
+    kyc_app, payments_app = kyc_agent_app(allow_scripted=offline_fixtures), payments_agent_app()
     gateway.add_middleware(TraceMiddleware, telemetry=control.state.ctx.telemetry, service="aegis.gateway")
     for name, app in servers.items():
         app.add_middleware(TraceMiddleware, telemetry=control.state.ctx.telemetry, service=f"aegis.mcp.{name}")
@@ -368,7 +408,15 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
         app.add_middleware(TraceMiddleware, telemetry=control.state.ctx.telemetry, service=f"aegis.agent.{name}")
     mounts = {name: Mount(f"/demo/mcp/{name}", app) for name, app in servers.items()}
     holder: dict = {}
-    studio = studio_app(lambda: holder["world"])
+    fixture_routes = []
+    if offline_fixtures:
+        from aegis_demo.fake_llm import fake_llm_app
+        from aegis_demo.studio import studio_app
+
+        studio = studio_app(lambda: holder["world"])
+        fixture_routes = [Mount("/demo/fake-llm", fake_llm_app())]
+    else:
+        studio = console_app(lambda: holder["world"])
     studio.state.ctx = control.state.ctx
     ui = (
         [
@@ -386,7 +434,7 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
             *mounts.values(),
             Mount("/demo/agents/kyc", kyc_app),
             Mount("/demo/agents/payments", payments_app),
-            Mount("/demo/fake-llm", fake_llm_app()),
+            *fixture_routes,
             Mount("/demo/api", studio),
             *extra_routes,
             *ui,
@@ -406,10 +454,13 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
     transport.app = composite
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(control.router.lifespan_context(control))
+        if bank:
+            await bank.seed()
         await stack.enter_async_context(gateway.router.lifespan_context(gateway))
         for app in servers.values():
             await stack.enter_async_context(app.router.lifespan_context(app))
         world = World(settings, http, control, gateway, mounts, stack, kyc_app, payments_app)
+        world.bank, world.offline_fixtures = bank, offline_fixtures
         world.composite = composite
         holder["world"] = world
         await bootstrap(world)

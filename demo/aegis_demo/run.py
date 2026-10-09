@@ -7,7 +7,7 @@ import time
 from aegis.sdk import AegisDenied
 from aegis_demo import mcp_servers
 from aegis_demo.data import LANDLORD_IBAN
-from aegis_demo.world import BASE, FAKE_LLM_URL, running_world
+from aegis_demo.testing import BASE, FAKE_LLM_URL, running_world
 
 JAN = "jan.devries"
 

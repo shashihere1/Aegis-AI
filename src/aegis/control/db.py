@@ -5,11 +5,13 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from aegis.control import bank_tables  # noqa: F401 -- register additive sandbox/archive tables
 from aegis.control.tables import Base
 
 
 class Database:
     def __init__(self, url: str, schema: str = ""):
+        self.schema = schema
         kwargs = {}
         if schema:
             if not url.startswith("postgresql") or not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", schema):

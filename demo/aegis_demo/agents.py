@@ -37,7 +37,7 @@ def specialist_app(name: str) -> FastAPI:
     return app
 
 
-def kyc_agent_app() -> FastAPI:
+def kyc_agent_app(*, allow_scripted: bool = False) -> FastAPI:
     app = specialist_app("KYC Verification Agent")
 
     @app.post("/")
@@ -53,11 +53,14 @@ def kyc_agent_app() -> FastAPI:
 
                 receipt = await verify_with_framework(task, meta["customer_id"], meta["document_id"])
                 await task.complete()
-            else:
+            elif allow_scripted:
                 result = await task.call_tool(
                     "kyc", "verify_document", {"customer_id": meta["customer_id"], "document_id": meta["document_id"]}
                 )
                 receipt = structured(result)
+            else:
+                await task.complete()
+                raise AegisDenied("KYC requires Microsoft Agent Framework in the normal app.")
         except AegisDenied as exc:
             return {"jsonrpc": "2.0", "id": body.get("id"), "result": a2a_result("failed", {"error": str(exc)})}
         return {"jsonrpc": "2.0", "id": body.get("id"), "result": a2a_result("completed", receipt)}

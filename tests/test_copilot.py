@@ -17,7 +17,7 @@ from aegis.guard.detectors import scan_text, scan_tool_description
 from aegis.sdk import AegisDenied
 from aegis_demo.agents import structured
 from aegis_demo.copilot import SYSTEM, Investigator, interrupt_copilot_history, validate_answer
-from aegis_demo.world import BASE, running_world
+from aegis_demo.testing import BASE, running_world
 
 
 def completion(name=None, args=None, answer=None):

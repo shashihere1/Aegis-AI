@@ -40,7 +40,7 @@ export function Alerts() {
           <Loading />
         ) : !rows.length ? (
           <EmptyState icon={TriangleAlert} title="No alerts">
-            Run scene S4 (prompt-injection attack) or A4 (rug pull) from Demo Studio.
+            Alerts appear when Aegis detects suspicious requests or tool-definition drift.
           </EmptyState>
         ) : (
           <table className="w-full">
