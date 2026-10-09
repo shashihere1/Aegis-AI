@@ -9,6 +9,7 @@ import pytest
 
 from aegis.control.evidence_verify import verify_pack
 from aegis.control.tables import Alert, LedgerEntry
+from aegis_demo import catalog
 from aegis_demo.world import BASE, seed_registry
 
 
@@ -19,7 +20,7 @@ async def test_auditor_can_download_verifiable_pack(world):
     preview = await world.api("eva.visser", "GET", "/v1/evidence/summary")
     assert preview.status_code == 200
     assert preview.json()["integrity"]["ok"] is True
-    assert preview.json()["counts"]["agents"] == 3
+    assert preview.json()["counts"]["agents"] == len(catalog.AGENTS)  # every demo agent, whatever the catalog holds
 
     response = await world.api("eva.visser", "GET", "/v1/evidence/pack")
     assert response.status_code == 200
@@ -113,4 +114,4 @@ async def test_pack_includes_full_seeded_inventory(world):
     assert verify_pack(response.content)["ok"]
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["counts"]["agents"] == 1247
+    assert manifest["counts"]["agents"] == len(catalog.AGENTS) + 1244
