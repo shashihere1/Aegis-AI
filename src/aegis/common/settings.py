@@ -32,6 +32,9 @@ class Settings(BaseModel):
     # the STS key when that one is persistent, otherwise ephemeral. Kept apart from the STS key so a signed
     # checkpoint can never be presented as a token, and a token key can never sign evidence.
     evidence_key_path: str = ""
+    evidence_automation_enabled: bool = True
+    evidence_check_seconds: int = Field(default=60, ge=1, le=3600)
+    evidence_checkpoint_seconds: int = Field(default=3600, ge=60, le=86400)
     identity_state_dir: str = ""  # local development identities; never a production secret store
 
     # python: in-process mirror of the Rego. rego: the Rego itself, in-process via regopy (no binary needed).

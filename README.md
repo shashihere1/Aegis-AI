@@ -33,7 +33,7 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Shadow-agent discovery (Gateway traffic + IdP scan), claim / quarantine | ✅ | `src/aegis/control/discovery.py` |
 | Ownership re-attestation: scheduled campaigns (default every 90 days), overdue alert (DET-14) or auto-suspend, leaver → orphaned agents, owner hand-over | ✅ | `ownership.py`, `registry.py` |
 | Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
-| Auditor-only demo evidence pack: HTML report, JSON records, SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
+| Auditor-only scoped, signed HTML/JSON/CSV reports; 15-control mappings, scheduled generation and saved review history | ✅ (synthetic application evidence; not certification) | `src/aegis/control/evidence.py`, `src/aegis/control/evidence_reports.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
 | Versioned policy configuration: draft, replay, separate approval, activation and rollback | ✅ (Python PDP configuration) | `src/aegis/control/policies.py` |
 | Policy-only time machine over recorded inputs; never executes tools or payments | ✅ (compatible evaluator versions) | `policies.py` |
@@ -44,7 +44,7 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Sign-in for people through any OpenID Connect provider (Keycloak, Microsoft Entra ID, Okta...): authorization code + PKCE, signature/issuer/audience/expiry checks, provider roles mapped to Aegis roles; dev login can be switched off | ✅ (tested against a fake provider and a built-in one; not yet against a live Keycloak or Entra tenant) | `src/aegis/control/identity/oidc.py`, `users.py`, `web/src/lib/auth.ts` |
 | Natural-language investigation Copilot (PS G2), investigator RBAC, read-only MCP evidence and verified citation IDs | Implemented; offline regression coverage, live Azure acceptance pending | `src/aegis/control/investigation.py`, `demo/aegis_demo/copilot.py` |
 | **Three policy engines on one governed policy**: the Python mirror, the authoritative Rego in-process (regopy), and an OPA server that must run exactly the approved Rego; any engine failure is a recorded deny | ✅ (OPA server tested against a fake OPA here; the real-OPA tests run in CI) | `src/aegis/policy/engines.py`, `config/policies/` |
-| Regulatory-grade evidence packs, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities, publishing Rego *source* changes through governance | ⏳ remaining | — |
+| Production evidence assurance (HSM signing, external timestamp, regulator filing), Azure deployment, Microsoft Entra Agent ID provisioning of agent identities, publishing Rego *source* changes through governance | ⏳ remaining | — |
 
 
 ## Persistent synthetic banking sandbox
@@ -194,10 +194,12 @@ Approval alone does not execute a transfer; the customer explicitly resumes it.
 
 For the evidence finale, switch to **Eva Visser (Auditor)**, open **Audit Ledger**, and download the evidence pack.
 Open `report.html` in the ZIP for the readable story. Extract `verify_pack.py` and run
-`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip"` to recompute its file hashes and ledger chain. The export is
+`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip" --key <trusted-fingerprint>` to verify its signatures,
+file hashes and selected ledger inclusion proofs. The server verifies the complete source chain; the scoped
+offline verifier does not recompute undisclosed contents. The export is
 auditor-only and refuses to download if ledger verification fails. It contains synthetic demo records,
 including approval arguments and policy inputs, so treat the ZIP as confidential. Its manifest is not
-externally signed or timestamped, and the local role gate uses the passwordless dev IdP; this is **not**
+backed by an external trust service or timestamp, and the default local role gate uses the passwordless dev IdP; this is **not**
 a certified regulatory report or production access control.
 
 ## Run it (Windows, Python 3.14; no Docker needed)
@@ -457,6 +459,13 @@ requires a newly reviewed policy version; older incompatible inputs are skipped 
 authentication and cloud telemetry export remain separate work.
 
 ## Tests and evidence
+
+As **Eva Visser (Auditor)**, open **Audit Ledger → Compliance evidence & signed reports** to generate a
+date/agent/task-scoped report, inspect the 15-control coverage matrix, and create hourly/daily/weekly schedules.
+Reports and schedules persist in PostgreSQL; the worker signs scheduled ZIPs without an Azure call. Unrelated
+ledger payloads are omitted using signed inclusion proofs, rather than exporting the complete audit history.
+See [the reporting walkthrough and limitations](docs/evidence-reporting.md). Restart the backend after updating
+the code to create the new additive tables and start its reporting worker; no database reset is needed.
 
 Standalone SDK users must configure an OpenTelemetry SDK provider/exporter for SDK spans; the demo supplies its
 local provider. W3C trace context is explicitly carried by the SDK and gateway clients, not dependent on the

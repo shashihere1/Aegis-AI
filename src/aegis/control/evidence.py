@@ -1,5 +1,6 @@
 """Auditor-only, signed and self-verifying evidence bundle for the local Aegis demonstration."""
 
+import csv
 import hashlib
 import html
 import io
@@ -8,7 +9,7 @@ import zipfile
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aegis.control import attestation, ledger
 from aegis.control.auth import require_roles
 from aegis.control.context import ControlContext, ctx, session
+from aegis.control.evidence_proofs import inclusion_proofs
+from aegis.control.evidence_scope import moment, select_records
+from aegis.control.evidence_verify import verify_jws
 from aegis.control.identity.idp import Persona
 from aegis.control.tables import (
     Agent,
@@ -25,15 +29,19 @@ from aegis.control.tables import (
     Approval,
     CaseEvent,
     DecisionRecord,
+    DiscoveryFinding,
     LedgerCheckpoint,
     LedgerEntry,
     Mandate,
+    McpServer,
     PolicyState,
     PolicyVersion,
+    Tool,
     TraceSpan,
+    Usage,
 )
 
-FORMAT = "aegis-demo-evidence-pack-v2"
+FORMAT = "aegis-scoped-evidence-pack-v3"
 
 FIELDS = {
     "agents": (
@@ -49,6 +57,10 @@ FIELDS = {
         "status",
         "created_at",
         "last_active_at",
+        "orphaned",
+        "attestation_due",
+        "max_data_class",
+        "idp_client_id",
     ),
     "mandates": (
         "id",
@@ -121,11 +133,14 @@ FIELDS = {
     "case_events": ("id", "alert_id", "actor", "kind", "detail", "ts"),
     "risk": ("agent_id", "score", "tier", "breakdown", "baseline", "updated_at"),
     "traces": ("span_id", "trace_id", "parent_id", "name", "service", "start_ns", "end_ns", "status", "attributes"),
+    "tools": ("id", "server_id", "name", "status", "definition_hash", "approved_hash", "classification"),
+    "servers": ("id", "owner", "vendor", "status", "created_at"),
+    "usage": ("id", "ts", "agent_id", "mandate_id", "model", "input_tokens", "output_tokens", "cost_eur", "latency_ms"),
+    "discovery": ("id", "sources", "suggested_owner", "agent_id", "status", "first_seen", "last_seen", "hits"),
 }
 
-# Activity records a date range narrows, and the time each one happened. Everything else is current state (who owns
-# which agent, which policy is active) or integrity proof (the ledger and its checkpoints), exported whole: the chain
-# can only be recomputed from its first entry.
+# Activity uses the reporting period. Related inventory/risk/tool state is labelled current context.
+# Only selected ledger payloads are disclosed; signed Merkle proofs commit to the verified source chain.
 PERIOD_FIELDS = {
     "mandates": "issued_at",
     "decisions": "ts",
@@ -187,6 +202,8 @@ def period_bounds(start: date | None, end: date | None) -> tuple[datetime | None
     """Whole UTC days, both inclusive: [start 00:00, the day after end 00:00)."""
     if start and end and start > end:
         raise HTTPException(422, "'from' must be on or before 'to'")
+    if end == date.max:
+        raise HTTPException(422, "'to' is outside the supported range")
     lower = datetime.combine(start, time.min, UTC) if start else None
     upper = datetime.combine(end + timedelta(days=1), time.min, UTC) if end else None
     return lower, upper
@@ -208,10 +225,23 @@ def in_period(value, lower: datetime | None, upper: datetime | None) -> bool:
 
 
 async def snapshot(
-    s: AsyncSession, generated_by: str, source: str, start: date | None = None, end: date | None = None
+    s: AsyncSession, generated_by: str, source: str, start: date | None = None, end: date | None = None,
+    *, agent_id: str | None = None, root_id: str | None = None, framework: str = "all",
+    lower: datetime | None = None, upper: datetime | None = None,
+    signing_key=None,
 ) -> dict:
-    """Read one consistent PostgreSQL snapshot, including policy and investigation evidence."""
-    lower, upper = period_bounds(start, end)
+    """Verify the full source chain, but disclose only requested activity and related context."""
+    from aegis.control.evidence_controls import FRAMEWORKS
+
+    if framework != "all" and framework not in FRAMEWORKS:
+        raise HTTPException(422, "Unknown evidence framework")
+    if lower is None or upper is None:
+        end = end or datetime.now(UTC).date()
+        try:
+            start = start or end - timedelta(days=6)
+        except OverflowError as exc:
+            raise HTTPException(422, "Reporting dates are outside the supported range") from exc
+        lower, upper = period_bounds(start, end)
     if s.bind.dialect.name == "postgresql":
         await s.connection(execution_options={"isolation_level": "REPEATABLE READ"})
     tables = {
@@ -228,27 +258,77 @@ async def snapshot(
         "case_events": (CaseEvent, CaseEvent.ts),
         "risk": (AgentRisk, AgentRisk.agent_id),
         "traces": (TraceSpan, TraceSpan.start_ns),
+        "tools": (Tool, Tool.id),
+        "servers": (McpServer, McpServer.id),
+        "usage": (Usage, Usage.id),
+        "discovery": (DiscoveryFinding, DiscoveryFinding.id),
     }
     rows = {}
     for name, (model, order) in tables.items():
         rows[name] = (await s.execute(select(model).order_by(order))).scalars().all()
-        if name in PERIOD_FIELDS and (lower or upper):
-            rows[name] = [r for r in rows[name] if in_period(getattr(r, PERIOD_FIELDS[name]), lower, upper)]
-    integrity = ledger.verify_entries(rows["ledger"])
+    integrity = source_integrity(rows["ledger"], rows["checkpoints"], signing_key)
+    if agent_id and not any(a.id == agent_id for a in rows["agents"]):
+        raise HTTPException(404, "Unknown agent")
+    if root_id and not any(m.root_id == root_id for m in rows["mandates"]):
+        raise HTTPException(404, "Unknown root task")
+    if agent_id and root_id and not any(
+        m.root_id == root_id and (m.agent_id == agent_id or agent_id in m.chain) for m in rows["mandates"]
+    ):
+        raise HTTPException(422, "The selected agent is not part of this root task")
+    source_ledger = [record(e, FIELDS["ledger"]) for e in rows["ledger"]]
+    latest_checkpoint = attestation.checkpoint_record(rows["checkpoints"][-1]) if rows["checkpoints"] else None
+    rows = select_records(rows, lower, upper, agent_id, root_id)
+    proofs = inclusion_proofs(source_ledger, [record(e, FIELDS["ledger"]) for e in rows["ledger"]])
+    context_records = {
+        name: [getattr(row, "id", None) for row in rows[name]
+               if moment(getattr(row, field)) is not None and not lower <= moment(getattr(row, field)) < upper]
+        for name, field in PERIOD_FIELDS.items()
+    }
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "generated_by": generated_by,
         "source": source,
         "period": {
-            "from": start.isoformat() if start else None,
-            "to": end.isoformat() if end else None,
-            "filtered": sorted(PERIOD_FIELDS) if (lower or upper) else [],
+            "from": lower.date().isoformat(),
+            "to": (upper - timedelta(microseconds=1)).date().isoformat(),
+            "start": lower.isoformat(),
+            "end_exclusive": upper.isoformat(),
+            "filtered": sorted(PERIOD_FIELDS | {"ledger": "ts"}),
             "timezone": "UTC",
         },
+        "scope": {"agent_id": agent_id, "root_id": root_id, "framework": framework,
+                  "context": "Related current inventory/risk/tools; referenced or currently active policy versions.",
+                  "prior_context_records": {name: ids for name, ids in context_records.items() if ids},
+                  "proof_mode": "signed-merkle-inclusion"},
+        "ledger_proofs": proofs,
+        "latest_checkpoint": latest_checkpoint,
         "integrity": integrity,
         "counts": {name: len(items) for name, items in rows.items()},
         "records": {name: [record(item, FIELDS[name]) for item in items] for name, items in rows.items()},
     }
+
+
+def source_integrity(entries, checkpoints, key=None):
+    """Detect recomputed source hashes and verify prior checkpoints signed by the available evidence key."""
+    integrity = ledger.verify_entries(entries)
+    public_key = attestation.public_key(key) if key else None
+    for checkpoint in checkpoints:
+        n = checkpoint.entries
+        tip = entries[n - 1].entry_hash if 0 < n <= len(entries) else ledger.GENESIS if n == 0 else None
+        valid = n >= 0 and tip == checkpoint.tip
+        if valid and key and checkpoint.key_fingerprint == key.fingerprint:
+            try:
+                claims = verify_jws(checkpoint.jws, public_key)
+                valid = (claims.get("typ"), claims.get("entries"), claims.get("tip"), claims.get("ts"),
+                         claims.get("signed_by")) == (
+                    attestation.CHECKPOINT, n, checkpoint.tip, checkpoint.ts, checkpoint.signed_by
+                )
+            except (ValueError, KeyError, TypeError):
+                valid = False
+        if not valid:
+            return {"ok": False, "entries": len(entries), "broken_at_seq": n,
+                    "problem": "Source chain or signature differs from an earlier checkpoint"}
+    return integrity
 
 
 def evidence_index(pack: dict) -> list[dict]:
@@ -299,7 +379,7 @@ def evidence_index(pack: dict) -> list[dict]:
 
 def regulatory_mapping(pack: dict) -> list[dict]:
     counts = pack["counts"]
-    return [
+    mappings = [
         {
             "regulation": regulation,
             "reference": reference,
@@ -310,24 +390,47 @@ def regulatory_mapping(pack: dict) -> list[dict]:
         }
         for regulation, reference, expectation, evidence, keys in REGULATIONS
     ]
+    from aegis.control.evidence_controls import FRAMEWORKS
+
+    names = {"EU AI Act": "eu-ai-act", "DORA": "dora", "GDPR": "gdpr"}
+    for item in mappings:
+        item["source_url"] = FRAMEWORKS[names[item["regulation"]]]["url"]
+        item["assessment"] = "human_review_required"
+        item["limitations"] = (
+            "Supporting evidence only, not a complete Article 30 processing register."
+            if item["regulation"] == "GDPR" and item["reference"] == "Art. 30" else
+            "Applicability and sufficiency require Compliance/Legal review."
+        )
+    framework = pack.get("scope", {}).get("framework", "all")
+    return [m for m in mappings if framework == "all" or names[m["regulation"]] == framework]
 
 
 def _table(headers: tuple[str, ...], rows: list[tuple]) -> str:
     if not rows:
-        return '<p class="empty">No matching events were recorded in this session.</p>'
+        return '<p class="empty">No matching evidence was recorded in the selected scope.</p>'
     head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
-    body = "".join("<tr>" + "".join(f"<td>{html.escape(str(v or '—'))}</td>" for v in row) + "</tr>" for row in rows)
+    body = "".join("<tr>" + "".join(f"<td>{html.escape(str(v if v is not None else '—'))}</td>"
+                                   for v in row) + "</tr>" for row in rows)
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
 def period_text(period: dict) -> str:
     if not period["filtered"]:
         return "all recorded activity"
+    if period.get("start") and period.get("end_exclusive"):
+        return f"activity from {period['start']} up to (not including) {period['end_exclusive']}"
     return f"activity from {period['from'] or 'the first record'} to {period['to'] or 'now'} (UTC, inclusive)"
 
 
 def report_html(pack: dict, signing: dict) -> str:
+    from aegis.control.evidence_controls import control_coverage, executive_summary
+
     counts = pack["counts"]
+    coverage = control_coverage(pack)
+    control_table = _table(("Control", "Evidence status", "Records", "Gaps / reviewer checks"), [
+        (f"{c['id']} {c['title']}", c["status"], c["observed_records"], c["limitations"]) for c in coverage
+    ])
+    summary_text = html.escape(executive_summary(pack, coverage))
     integrity = pack["integrity"]
     alerts = sorted(pack["records"]["alerts"], key=lambda a: a["ts"], reverse=True)[:12]
     approvals = sorted(pack["records"]["approvals"], key=lambda a: a["created_at"], reverse=True)[:12]
@@ -382,6 +485,10 @@ covers {html.escape(period_text(pack["period"]))}</p>
 <p>Signed with evidence key <code>{html.escape(signing["fingerprint"])}</code> ({html.escape(signing["mode"])}) ·
 checkpoint #{signing["checkpoint_id"]}</p></div>
 <div class="grid">{cards}</div>
+<h2>Executive summary (deterministic, not AI-generated)</h2><p>{summary_text}</p>
+<h2>Aegis control coverage</h2><div class="scroll">{control_table}</div>
+<p>Full evidence queries, record IDs and official reference links are in control_coverage.json.</p>
+<h2>Selected scope</h2><p>{html.escape(json.dumps(pack['scope'], sort_keys=True))}</p>
 <h2>Evidence index</h2><p>These are pointers to recorded data, not regulatory compliance verdicts.</p>
 <div class="scroll">{_table(("Question", "Records", "Files"), index_rows)}</div>
 <h2>Regulatory mapping</h2>
@@ -401,20 +508,24 @@ checkpoint, even with every hash recomputed, the checkpoint no longer matches.</
 <div class="scroll">{_table(("#", "Signed at", "Entries", "Tip", "Signed by"), checkpoint_rows)}</div>
 <h2>How to verify and use this pack</h2>
 <p>Extract the verifier and run <code>python verify_pack.py &lt;zip-file&gt; --key
-{html.escape(signing["fingerprint"])}</code>. It checks the signature on the manifest, every file hash, the ledger
-chain, and every signed checkpoint against the chain. Compare the key with the fingerprint Aegis publishes at
+{html.escape(signing["fingerprint"])}</code>. It checks the manifest signature, file hashes, the signed source
+checkpoint and inclusion proofs for disclosed ledger entries. The server verified the full chain; this verifier
+does not recompute undisclosed contents. Compare the key with the fingerprint Aegis publishes at
 <code>/v1/evidence/key</code> or one you recorded earlier; without <code>--key</code> the verifier proves the pack is
 intact and self-consistent, not who made it. Signature checks need the <code>cryptography</code> package.</p>
 <div class="note"><strong>Scope and limitations.</strong> This is synthetic, local-demo evidence from
 {html.escape(pack["source"])}. It is not a certified EU AI Act, DORA or GDPR report. The evidence key is a local
-file, not an HSM or Key Vault key, and the signature carries no trusted timestamp. The ledger and checkpoints are
-always exported in full, because the chain can only be recomputed from its first entry; a date range narrows the
-activity records only. Treat the ZIP as confidential because approval arguments and policy inputs may contain
-sensitive data.</div>
+file, not an HSM or Key Vault key, and the signature carries no trusted timestamp. Only selected ledger entries
+are disclosed. Signed Merkle inclusion proofs bind them to the server-verified source chain; an offline verifier
+does not recompute undisclosed chain contents. Current related inventory and active policies are explicitly
+marked as context, not historical state. Treat the ZIP as confidential: selected approval arguments and policy
+inputs may contain sensitive data.</div>
 </main></body></html>"""
 
 
 def build_zip(pack: dict, key, checkpoint_id: int, mode: str, issuer: str) -> bytes:
+    from aegis.control.evidence_controls import CATALOG, control_coverage, executive_summary
+
     fingerprint = key.fingerprint
     signing = {"fingerprint": fingerprint, "mode": mode, "checkpoint_id": checkpoint_id}
     files = {
@@ -425,11 +536,35 @@ def build_zip(pack: dict, key, checkpoint_id: int, mode: str, issuer: str) -> by
     files["regulatory_mapping.json"] = (
         json.dumps(regulatory_mapping(pack), ensure_ascii=False, indent=2) + "\n"
     ).encode()
+    coverage = control_coverage(pack)
+    for name, value in {
+        "control_catalog.json": CATALOG,
+        "control_coverage.json": coverage,
+        "ledger_proofs.json": pack["ledger_proofs"],
+        "report.json": {"summary": executive_summary(pack, coverage), "summary_method": "deterministic",
+                        "counts": pack["counts"], "period": pack["period"], "scope": pack["scope"],
+                        "decision_statistics": {kind: sum(d["decision"] == kind for d in pack["records"]["decisions"])
+                                                for kind in ("allow", "deny", "require_approval", "rate_limited")}},
+    }.items():
+        files[name] = (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    for name, rows in pack["records"].items():
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(FIELDS[name])
+        for row in rows:
+            values = []
+            for field in FIELDS[name]:
+                value = row.get(field)
+                text = (json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else
+                        str(value) if value is not None else "")
+                values.append("'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text)
+            writer.writerow(values)
+        files[f"csv/{name}.csv"] = output.getvalue().encode("utf-8")
     files["report.html"] = report_html(pack, signing).encode()
     files["verify_pack.py"] = Path(__file__).with_name("evidence_verify.py").read_bytes()
     files["README.txt"] = (
-        "Aegis AI demo evidence pack\n\nOpen report.html first. To verify the signature, all file hashes, the audit "
-        "chain and its signed checkpoints, extract verify_pack.py and run:\n\n"
+        "Aegis AI demo evidence pack\n\nOpen report.html first. To verify the signature, all file hashes, "
+        "selected ledger inclusion proofs and source checkpoint, extract verify_pack.py and run:\n\n"
         f"    python verify_pack.py <path-to-this-zip> --key {fingerprint}\n\n"
         "Compare that key fingerprint with the one Aegis publishes at /v1/evidence/key. Signature checks need the "
         "Python 'cryptography' package.\n\nThis pack is synthetic demo data, not a certified regulatory report. The "
@@ -442,8 +577,10 @@ def build_zip(pack: dict, key, checkpoint_id: int, mode: str, issuer: str) -> by
         "generated_by": pack["generated_by"],
         "source": pack["source"],
         "period": pack["period"],
+        "scope": pack["scope"],
         "counts": pack["counts"],
-        "ledger": pack["integrity"],
+        "ledger": pack["integrity"] | {"proof_mode": "signed-merkle-inclusion",
+                   "merkle_root": pack["ledger_proofs"]["root"], "disclosed_entries": pack["counts"]["ledger"]},
         "checkpoint_id": checkpoint_id,
         "evidence_key": {"fingerprint": fingerprint, "mode": mode, "jwk": attestation.public_key(key)},
         "files": {
@@ -494,13 +631,25 @@ def router() -> APIRouter:
     async def summary(
         start: date | None = Query(None, alias="from"),
         end: date | None = Query(None, alias="to"),
+        agent_id: str | None = Query(None, min_length=1, max_length=20),
+        root_id: str | None = Query(None, min_length=1, max_length=40),
+        framework: str = Query("all"),
         s: AsyncSession = Depends(session),
         user: Persona = Depends(auditor),
         c: ControlContext = Depends(ctx),
     ):
-        pack = await snapshot(s, user.username, _source(c), start, end)
-        latest = pack["records"]["checkpoints"][-1] if pack["records"]["checkpoints"] else None
-        return {key: pack[key] for key in ("generated_at", "source", "period", "integrity", "counts")} | {
+        from aegis.control.evidence_controls import control_coverage, executive_summary
+
+        pack = await snapshot(s, user.username, _source(c), start, end, signing_key=c.evidence_key,
+                              agent_id=agent_id, root_id=root_id, framework=framework)
+        latest = pack["latest_checkpoint"]
+        return {key: pack[key] for key in ("generated_at", "source", "period", "scope", "integrity", "counts")} | {
+            "coverage": control_coverage(pack),
+            "executive_summary": executive_summary(pack, control_coverage(pack)),
+            "automation": {"enabled": (c.settings.evidence_automation_enabled
+                                       and ":memory:" not in c.settings.database_url),
+                           "persistent_key": bool(c.settings.evidence_key_file),
+                           "check_seconds": c.settings.evidence_check_seconds},
             "evidence_key": {"fingerprint": c.evidence_key.fingerprint, "mode": _key_mode(c)},
             "latest_checkpoint": (
                 {k: latest[k] for k in ("id", "entries", "tip", "ts", "signed_by")} if latest else None
@@ -515,36 +664,22 @@ def router() -> APIRouter:
     async def download_pack(
         start: date | None = Query(None, alias="from"),
         end: date | None = Query(None, alias="to"),
-        s: AsyncSession = Depends(session),
+        agent_id: str | None = Query(None, min_length=1, max_length=20),
+        root_id: str | None = Query(None, min_length=1, max_length=40),
+        framework: str = Query("all"),
         user: Persona = Depends(auditor),
         c: ControlContext = Depends(ctx),
     ):
-        pack = await snapshot(s, user.username, _source(c), start, end)
-        if not pack["integrity"]["ok"]:
-            raise HTTPException(409, f"Audit ledger verification failed at entry {pack['integrity']['broken_at_seq']}")
-        await s.rollback()  # end the read snapshot; the checkpoint and ledger event are written fresh below
-        async with c.db.sessionmaker() as w:
-            checkpoint = await attestation.record_checkpoint(
-                w, c.evidence_key, user.username, _issuer(c), pack["integrity"]["entries"], pack["integrity"]["tip"]
-            )
-            pack["records"]["checkpoints"].append(attestation.checkpoint_record(checkpoint))
-            pack["counts"]["checkpoints"] += 1
-            body = build_zip(pack, c.evidence_key, checkpoint.id, _key_mode(c), _issuer(c))
-            await ledger.append(w, "evidence.exported", user.username, f"checkpoint:{checkpoint.id}", {
-                "period": pack["period"], "entries": checkpoint.entries, "tip": checkpoint.tip,
-                "pack_sha256": hashlib.sha256(body).hexdigest(), "key_fingerprint": c.evidence_key.fingerprint,
-            })
-            await w.commit()
-        filename = f"aegis-evidence-{datetime.now(UTC):%Y%m%d-%H%M%S}.zip"
-        return Response(
-            body,
-            media_type="application/zip",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        from pydantic import ValidationError
+
+        from aegis.control.evidence_reports import Scope, attachment, generate_report
+
+        try:
+            spec = Scope(start=start, end=end, agent_id=agent_id, root_id=root_id, framework=framework)
+        except ValidationError as exc:
+            raise HTTPException(422, "Invalid evidence scope") from exc
+        result, body = await generate_report(c, user.username, spec)
+        return attachment(body, result["id"])
 
     @r.get("/checkpoints")
     async def checkpoints(

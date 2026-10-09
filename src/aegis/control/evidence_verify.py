@@ -4,8 +4,10 @@ Usage after extracting this file from the ZIP:
 
     python verify_pack.py aegis-evidence-....zip --key <evidence-key-fingerprint>
 
-It checks the ES256 signature on the manifest, every file hash and record count, the audit ledger's hash chain, and
-every signed ledger checkpoint against that chain. Pass --key with the fingerprint Aegis publishes at
+It checks the ES256 signature, file hashes/counts and signed source checkpoint. V3 packs disclose selected
+ledger entries using Merkle inclusion proofs; the server verifies the full source chain, while this verifier
+does NOT recompute undisclosed contents. Older V2 packs still receive full-chain verification. Pass --key with
+the fingerprint Aegis publishes at
 /v1/evidence/key (or one you recorded earlier) to prove WHO signed the pack; without it the pack is only proven
 intact and self-consistent. Hashing uses the standard library; the signature check needs the `cryptography` package
 (pip install cryptography). --skip-signatures checks everything else when that package is unavailable.
@@ -20,6 +22,7 @@ import sys
 import zipfile
 
 FORMAT = "aegis-demo-evidence-pack-v2"
+SCOPED_FORMAT = "aegis-scoped-evidence-pack-v3"
 GENESIS = "0" * 64
 
 
@@ -85,7 +88,7 @@ def verify_pack(source, expected_key: str | None = None, check_signatures: bool 
             raise ValueError("Duplicate members, or missing manifest or signature")
         manifest_bytes = archive.read("manifest.json")
         manifest = json.loads(manifest_bytes)
-        if manifest.get("format") != FORMAT:
+        if manifest.get("format") not in (FORMAT, SCOPED_FORMAT):
             raise ValueError("Unsupported evidence pack format")
         if set(names) != set(manifest["files"]) | {"manifest.json", "signature.jws"}:
             raise ValueError("Archive member list does not match manifest")
@@ -109,6 +112,9 @@ def verify_pack(source, expected_key: str | None = None, check_signatures: bool 
             records = json.loads(archive.read(f"records/{key}.json"))
             if len(records) != count:
                 raise ValueError(f"Record count mismatch: {key}")
+
+        if manifest["format"] == SCOPED_FORMAT:
+            return verify_scoped(archive, manifest, jwk, fingerprint, expected_key, check_signatures)
 
         entries = json.loads(archive.read("records/ledger.json"))
         previous = GENESIS
@@ -150,6 +156,69 @@ def verify_pack(source, expected_key: str | None = None, check_signatures: bool 
         }
 
 
+def verify_scoped(archive, manifest, jwk, fingerprint, expected_key, signatures):
+    """Verify selective disclosure against a signed root, not the undisclosed contents of the source chain."""
+    entries = json.loads(archive.read("records/ledger.json"))
+    tree = json.loads(archive.read("ledger_proofs.json"))
+    anchor = manifest["ledger"]
+    n = tree["source_entries"]
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise ValueError("Invalid source ledger length")
+    if (tree["algorithm"] != "sha256-domain-separated-v1" or anchor.get("ok") is not True
+            or anchor.get("proof_mode") != "signed-merkle-inclusion" or anchor["entries"] != n
+            or anchor["merkle_root"] != tree["root"] or anchor["disclosed_entries"] != len(entries)
+            or len(tree["proofs"]) != len(entries)):
+        raise ValueError("Ledger inclusion anchor mismatch")
+    if n == 0 and (entries or tree["root"] != _digest(b"\x00aegis-empty-ledger") or anchor["tip"] != GENESIS):
+        raise ValueError("Invalid empty ledger proof")
+    previous_seq = previous_index = -1
+    previous_hash = None
+    for entry, proof in zip(entries, tree["proofs"], strict=True):
+        seq, index = entry["seq"], proof["index"]
+        if not isinstance(seq, int) or isinstance(seq, bool) or not isinstance(index, int) or isinstance(index, bool):
+            raise ValueError("Ledger sequence and proof index must be integers")
+        if (proof["seq"] != seq or seq <= previous_seq or not previous_index < index < n
+                or entry["entry_hash"] != _entry_hash(entry["prev_hash"], entry)):
+            raise ValueError("Invalid disclosed ledger entry or proof order")
+        value = _digest(b"\x00" + f"{seq}:{entry['entry_hash']}".encode("ascii"))
+        cursor, width = index, n
+        for sibling in proof["siblings"]:
+            if width <= 1:
+                raise ValueError("Unexpected ledger proof depth")
+            left, right = (sibling, value) if cursor % 2 else (value, sibling)
+            if cursor % 2 == 0 and cursor + 1 >= width and sibling != value:
+                raise ValueError("Invalid odd ledger-tree node")
+            value = _digest(b"\x01" + bytes.fromhex(left) + bytes.fromhex(right))
+            cursor //= 2
+            width = (width + 1) // 2
+        if width != 1 or value != tree["root"]:
+            raise ValueError("Ledger inclusion proof does not verify")
+        if index == 0 and entry["prev_hash"] != GENESIS:
+            raise ValueError("Invalid ledger genesis")
+        if previous_hash is not None and index == previous_index + 1 and entry["prev_hash"] != previous_hash:
+            raise ValueError("Disclosed adjacent entries do not chain")
+        if index == n - 1 and entry["entry_hash"] != anchor["tip"]:
+            raise ValueError("Ledger tip mismatch")
+        previous_seq, previous_index, previous_hash = seq, index, entry["entry_hash"]
+    checkpoints = json.loads(archive.read("records/checkpoints.json"))
+    own = [c for c in checkpoints if c["id"] == manifest["checkpoint_id"]]
+    if len(own) != 1:
+        raise ValueError("The export's own checkpoint is missing or duplicated")
+    checkpoint = own[0]
+    if (checkpoint["entries"], checkpoint["tip"], checkpoint["key_fingerprint"]) != (n, anchor["tip"], fingerprint):
+        raise ValueError("Source checkpoint differs from ledger anchor")
+    if signatures:
+        claims = verify_jws(checkpoint["jws"], jwk)
+        if (claims.get("typ"), claims.get("entries"), claims.get("tip"), claims.get("ts"), claims.get("signed_by")) != (
+            "aegis-ledger-checkpoint", n, anchor["tip"], checkpoint["ts"], checkpoint["signed_by"]
+        ):
+            raise ValueError("Source checkpoint differs from its signature")
+    return {"ok": True, "files": len(manifest["files"]), "entries": len(entries), "source_entries": n,
+            "tip": anchor["tip"], "key": fingerprint, "key_pinned": expected_key is not None,
+            "signatures_checked": signatures, "checkpoints": 1, "checkpoints_other_key": 0,
+            "proof_mode": "signed-merkle-inclusion", "full_chain_recomputed": False}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Verify an Aegis evidence pack")
     parser.add_argument("pack")
@@ -167,6 +236,9 @@ def main(argv=None) -> int:
     print(f"  {signed}; evidence key {result['key']} ({who})")
     earlier = f"; {result['checkpoints_other_key']} signed by an earlier key" if result["checkpoints_other_key"] else ""
     print(f"  {result['checkpoints']} signed checkpoints match the chain{earlier}")
+    if result.get("proof_mode") == "signed-merkle-inclusion":
+        print(f"  {result['entries']} disclosed entries included in {result['source_entries']} source entries; "
+              "undisclosed chain contents were verified by the server, not recomputed here")
     return 0
 
 

@@ -1,0 +1,264 @@
+{
+  "version": "1.0",
+  "purpose": "Engineering traceability aligned with plan Appendix D; applicability and sufficiency need Compliance/Legal review. Not a conformance or certification checklist.",
+  "sources": {
+    "eu-ai-act": {
+      "name": "EU AI Act",
+      "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32024R1689"
+    },
+    "dora": {
+      "name": "DORA",
+      "url": "https://eur-lex.europa.eu/eli/reg/2022/2554/oj/eng"
+    },
+    "gdpr": {
+      "name": "GDPR",
+      "url": "https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679"
+    },
+    "iso-42001": {
+      "name": "ISO/IEC 42001:2023",
+      "url": "https://www.iso.org/standard/42001"
+    },
+    "nist-ai-rmf": {
+      "name": "NIST AI RMF 1.0",
+      "url": "https://airc.nist.gov/airmf-resources/airmf/5-sec-core/"
+    }
+  },
+  "controls": [
+    {
+      "id": "AEG-C01",
+      "title": "Agent inventory and accountable ownership",
+      "queries": [
+        "agents",
+        "discovery"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 26",
+        "dora": "Art. 8",
+        "gdpr": "Art. 30",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Inventory supports review; it is not a complete GDPR processing register or ICT third-party register."
+    },
+    {
+      "id": "AEG-C02",
+      "title": "Unique identities and task-scoped access",
+      "queries": [
+        "agents",
+        "mandates"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 15",
+        "dora": "Art. 9",
+        "gdpr": "Art. 32",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Production IAM integration and verification of every credential provider need separate evidence."
+    },
+    {
+      "id": "AEG-C03",
+      "title": "Purpose limitation and data minimisation",
+      "queries": [
+        "mandates",
+        "decisions"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 9",
+        "dora": "Art. 9",
+        "gdpr": "Arts. 5(1)(b), 5(1)(c), 25",
+        "nist-ai-rmf": "MAP",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Purpose labels and redaction records alone do not establish lawful processing."
+    },
+    {
+      "id": "AEG-C04",
+      "title": "Versioned, independently approved policies",
+      "queries": [
+        "policies",
+        "decisions"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 9",
+        "dora": "Art. 6",
+        "gdpr": "Art. 5(2)",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Configuration review does not assess the bank's complete risk-management framework."
+    },
+    {
+      "id": "AEG-C05",
+      "title": "Human oversight and action approval",
+      "filters": {"ledger": {"event_type_prefixes": ["approval.", "agent.suspended", "mandate.revoked"]}},
+      "queries": [
+        "approvals",
+        "ledger"
+      ],
+      "refs": {
+        "eu-ai-act": "Arts. 14, 26(2)",
+        "dora": "Art. 11",
+        "nist-ai-rmf": "MANAGE",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "No approval events can mean no high-risk actions occurred; oversight competence requires human review."
+    },
+    {
+      "id": "AEG-C06",
+      "title": "MCP tool registry and definition integrity",
+      "queries": [
+        "tools",
+        "servers"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 15",
+        "dora": "Arts. 8, 28",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Not a DORA register-of-information template or third-party contractual assessment."
+    },
+    {
+      "id": "AEG-C07",
+      "title": "Prompt injection and unauthorized-use controls",
+      "queries": [
+        "decisions",
+        "alerts"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 15(5)",
+        "dora": "Art. 9",
+        "gdpr": "Art. 32",
+        "nist-ai-rmf": "MANAGE",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Alert absence does not prove robustness; adversarial testing is separate evidence."
+    },
+    {
+      "id": "AEG-C08",
+      "title": "Logging, lineage and integrity",
+      "queries": [
+        "ledger",
+        "traces"
+      ],
+      "refs": {
+        "eu-ai-act": "Arts. 12, 19, 26(6)",
+        "dora": "Art. 10",
+        "gdpr": "Art. 5(2)",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Export inclusion is verified; undisclosed chain contents are verified by the server. Legal retention is not certified."
+    },
+    {
+      "id": "AEG-C09",
+      "title": "Monitoring, anomaly detection and risk",
+      "queries": [
+        "alerts",
+        "risk"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 26(5)",
+        "dora": "Arts. 10, 17",
+        "nist-ai-rmf": "MEASURE",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Risk scores are operational signals, not a regulatory risk assessment."
+    },
+    {
+      "id": "AEG-C10",
+      "title": "Incident investigation and reporting support",
+      "queries": [
+        "alerts",
+        "cases",
+        "case_events"
+      ],
+      "refs": {
+        "dora": "Arts. 17-19",
+        "gdpr": "Art. 33",
+        "nist-ai-rmf": "MEASURE",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "This is investigation support, not incident classification, notification deadlines or regulator submission."
+    },
+    {
+      "id": "AEG-C11",
+      "title": "Segregation of duties and accountability",
+      "filters": {"ledger": {"event_type_prefixes": ["approval.", "policy.approved", "identity."]}},
+      "queries": [
+        "approvals",
+        "policies",
+        "ledger"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 26(2)",
+        "dora": "Art. 5",
+        "gdpr": "Art. 32",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Named actors support review; enterprise role assignments and person-link correctness require separate assurance."
+    },
+    {
+      "id": "AEG-C12",
+      "title": "Ownership re-attestation and access reviews",
+      "filters": {"ledger": {"event_type_prefixes": ["attestation.", "agent.owner_reassigned", "identity.leaver"]}},
+      "queries": [
+        "agents",
+        "ledger"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 26",
+        "gdpr": "Art. 5(1)(c)",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Current due dates are snapshots. Review attestation events for the period; not a full access certification."
+    },
+    {
+      "id": "AEG-C13",
+      "title": "Agent purpose and transparency",
+      "queries": [
+        "agents"
+      ],
+      "refs": {
+        "eu-ai-act": "Arts. 13, 50(1)",
+        "gdpr": "Arts. 13-14",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "A passport is supporting context, not proof of every customer disclosure or transparency duty."
+    },
+    {
+      "id": "AEG-C14",
+      "title": "Explainable authorization decisions",
+      "queries": [
+        "decisions",
+        "mandates"
+      ],
+      "refs": {
+        "eu-ai-act": "Art. 86",
+        "gdpr": "Art. 22",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Authorization reasons are not explanations of credit or other legally significant decisions."
+    },
+    {
+      "id": "AEG-C15",
+      "title": "Automated signed evidence reporting",
+      "filters": {"ledger": {"event_type_prefixes": ["evidence.", "ledger.checkpoint"]}},
+      "queries": [
+        "ledger",
+        "checkpoints"
+      ],
+      "refs": {
+        "gdpr": "Art. 5(2)",
+        "nist-ai-rmf": "GOVERN",
+        "iso-42001": "AI management-system evidence (indicative; no clause-level assessment)"
+      },
+      "limitations": "Signing is local-key attribution, not certification or trusted timestamping; pin the public-key fingerprint."
+    }
+  ]
+}

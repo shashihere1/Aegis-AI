@@ -7,6 +7,7 @@ import { useSession } from "../lib/session";
 import { useToast } from "../lib/toast";
 import type { EvidenceSummary, LedgerEntry, LedgerVerify } from "../lib/types";
 import { Button, Card, Chip, Drawer, JsonBlock, Loading, PageHeader, TextInput, Td, Th } from "../components/ui";
+import { EvidenceReports } from "./EvidenceReports";
 
 export function Evidence() {
   const { can } = useSession();
@@ -33,7 +34,7 @@ export function Evidence() {
       link.click();
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      toast("success", "Evidence pack downloaded", "Open report.html in the ZIP; run verify_pack.py to check its hashes and audit chain.");
+      toast("success", "Evidence pack downloaded", "Open report.html in the ZIP; run verify_pack.py to check signatures, hashes and inclusion proofs.");
     } catch (error) {
       toast("error", "Evidence pack unavailable", error instanceof Error ? error.message : String(error));
     } finally {
@@ -58,12 +59,13 @@ export function Evidence() {
           </Button>
         </div>
       </Card>
-      <Card title="Auditor proof pack" className="mb-4">
+      <EvidenceReports />
+      <Card title="Quick export (last seven UTC days)" className="mb-4">
         <div className="flex flex-wrap items-center gap-5 p-5">
           <div className="min-w-0 flex-1">
             <div className="font-semibold">Download the evidence behind this demo</div>
             <p className="mt-1 text-sm text-muted">
-              A readable HTML report, structured JSON records, a SHA-256 file manifest, and an offline audit-chain verifier.
+              A signed manifest, readable HTML report, JSON/CSV, control coverage and offline inclusion-proof verifier.
               The pack is synthetic demo evidence, not a certified regulatory report.
             </p>
             {auditor && pack.data && (

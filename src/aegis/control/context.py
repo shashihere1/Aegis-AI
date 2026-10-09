@@ -30,6 +30,8 @@ class ControlContext:
     oidc: OidcVerifier | None = None
     people: PersonDirectory | None = None  # which accounts are one real person (separation of duties)
     attestation_task: Any = None  # the re-attestation scheduler, while it runs
+    evidence_task: Any = None
+    evidence_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     agent_identity: Any = None  # AgentIdentityProvider: where each agent's own identity lives
     builtin_oidc: Any = None  # the demo-only OIDC provider, when enabled
     telemetry: Any = None
