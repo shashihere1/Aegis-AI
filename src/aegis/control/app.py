@@ -109,6 +109,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         await context.db.create_all()
         await policies.initialize(context)
+        await policies.sync_opa_on_startup(context)  # OPA runs the approved Rego from the database, not stale files
         await sts.rehydrate_revocations(context)
         await context.telemetry.start()
         # An in-memory SQLite database shares one connection, so a background transaction would interleave with

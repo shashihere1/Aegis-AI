@@ -35,8 +35,9 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
 | Auditor-only demo evidence pack: HTML report, JSON records, SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
-| Versioned policy configuration: draft, replay, separate approval, activation and rollback | ✅ (Python PDP configuration) | `src/aegis/control/policies.py` |
-| Policy-only time machine over recorded inputs; never executes tools or payments | ✅ (compatible evaluator versions) | `policies.py` |
+| Versioned policy configuration **and Rego**: draft, automatic checks, replay, Rego diff, separate approval, security sign-off for rule changes, activation and rollback; the engine runs the approved Rego from the database, never the file on disk | ✅ (Rego changes on the `rego` / `opa` engines; the Python mirror changes configuration only) | `src/aegis/control/policies.py`, `src/aegis/policy/rules_check.py` |
+| Policy-only time machine over recorded inputs, old rules vs new, flagging decisions that become more permissive; never executes tools or payments | ✅ | `policies.py` |
+| Approved Rego pushed to OPA on activation, rollback and start-up; an OPA that restarted empty gets it back | ✅ (fake OPA here; real OPA in CI) | `src/aegis/policy/engines.py` |
 | Shared OpenTelemetry trace across SDK, gateway, delegated agents and MCP; PostgreSQL exporter and UI waterfall | ✅ (local exporter, not cloud OTLP) | `src/aegis/telemetry.py` |
 | SOC case assignments, notes, evidence links, validated statuses and append-only history | ✅ | `src/aegis/control/investigations.py` |
 | Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
@@ -58,7 +59,7 @@ A React + TypeScript console in the look of the Fabric Vibe Studio prototype, on
 | Agent Lineage | Registry lineage graph plus real OpenTelemetry execution timings, service names and shared trace IDs |
 | Prompt Injection · Usage & Cost | Detections with highlighted payloads and a scan playground; tokens, cost and latency per agent |
 | Access Control · Approvals | Live Mandates with countdowns and revoke; approval cards bound to the exact action (amount, IBAN, chain) |
-| MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved configuration versions, replay and rollback; reference Rego source; hash-chain verification and evidence export |
+| MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved versions of configuration and Rego (rules editor, repository import, check report, Rego diff, security sign-off), replay and rollback; hash-chain verification and evidence export |
 | Demo Studio | Runs scripted scenes S2–S5 and A4 against the real APIs, with a step-by-step run log and a reset |
 | Investigation Copilot (also the floating bot for investigators) | Real Azure tool selection through Aegis; cited, redacted excerpts from recorded decisions, alerts, traces and other audit records; read-only |
 
@@ -236,6 +237,7 @@ is public with S256 PKCE and exact redirect URIs. Stop the built-in `--sso` serv
 | `mark.jansen` | soc-analyst | Mark Jansen |
 | `fatima.elamrani` | security-approver | Fatima El Amrani |
 | `fatima.elamrani.policy-approver` | policy-approver | Fatima El Amrani |
+| `lars.devos` | security-approver | Lars de Vos (the second sign-off on Rego changes) |
 | `eva.visser` | auditor | Eva Visser |
 | `admin` | admin | Platform Admin |
 
@@ -293,13 +295,29 @@ something unexpected, or runs different Rego, the call is **denied** (`PDP-001`)
 ever allowed by default. Switching engine on an existing database needs one newly approved policy version, because a
 version is bound to the evaluator that was approved (`rules_hash`).
 
+**The Rego is governed like the configuration.** Every policy version stores its own Rego and test cases in the
+database, and the `rego` / `opa` engines run exactly that Rego: editing `config/policies/*.rego` changes nothing until
+a version that imports it is approved and activated (the console shows when the repository differs). A draft keeps the
+active rules, edits them in the console, or imports them from the repository. Before it is saved it must pass automatic
+checks: it compiles, keeps `data.aegis.tool_call.decision`, stays in package `aegis.tool_call`, uses no network,
+introspection or non-deterministic builtins (`http.send`, `opa.runtime`, `time.now_ns`, ...), and passes every case in
+`config/policy_tests/tool_call_cases.json` (generated from the same shared cases as the Rego unit tests; a deliberate
+behaviour change updates its cases in the same draft). Replay then compares old rules with new on recorded traffic and
+flags every decision that becomes more permissive, the reviewer sees the Rego diff, and **a rule change (or a
+configuration change that loosens a replayed decision) needs a security sign-off from a second person** besides the
+policy approver (`SEC-001` until it has one). With OPA, Aegis pushes the approved Rego through OPA's policy API when a
+version is activated or rolled back and at start-up, and puts it back if OPA restarted empty; an OPA whose Rego was
+changed some other way is not silently overwritten: decisions fail closed until someone pushes the approved policy
+(`POST /v1/policies/opa/sync`). The Python mirror cannot run other Rego, so on `python` versions change configuration
+only.
+
 The Rego is hardened to fail closed: missing or wrong-typed fields deny, an unknown data ceiling counts as `public`, and
 a transfer amount that is not a number (for example the text `"25000"`) is refused (`ARG-001`) instead of compared.
 
 ```powershell
 $env:AEGIS_POLICY_ENGINE = 'rego'; .venv\Scripts\python -m aegis_demo.serve --ephemeral      # the Rego, no binary
 # with an OPA binary (AEGIS_OPA_BINARY, `opa` on PATH, or Downloads\opa\opa_windows_amd64.exe):
-.venv\Scripts\python -m aegis_demo.opa_setup start          # OPA on http://127.0.0.1:8181 serving config/policies
+.venv\Scripts\python -m aegis_demo.opa_setup start          # an empty OPA on :8181; Aegis pushes the approved Rego
 . .\.local\opa\aegis-opa-env.ps1; .venv\Scripts\python -m aegis_demo.serve --ephemeral
 .venv\Scripts\python -m aegis_demo.opa_setup test           # opa test config/policies (the generated Rego unit tests)
 ```
@@ -424,7 +442,9 @@ See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no password
 mirrors the Rego (kept in step by exact and differential tests); a real OPA binary has not been run on the
 development laptop (no approved download route yet), so the real-OPA tests run only in CI; Studio scenes remain scripted, while the optional
 [Bank Assistant](docs/live-agents.md) uses real LangGraph/Azure planning and a Microsoft Agent Framework KYC workflow;
-governed editing changes supported configuration, not Rego source; Microsoft Entra Agent ID provisioning and
+Rego can be changed through the governed workflow only on the `rego` / `opa` engines (the Python mirror is fixed), and
+pushing it to a real OPA has been tested only in CI and only into an OPA started without policy files (one that loaded
+files itself is updated by module id, tested against the fake OPA); Microsoft Entra Agent ID provisioning and
 Azure deployment are not built yet; Keycloak agent identities have been run
 only on a local single-node Keycloak (no clustering, TLS or secret manager). Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;

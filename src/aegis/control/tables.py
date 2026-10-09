@@ -264,6 +264,24 @@ class PolicyVersion(Base):
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PolicyBundle(Base):
+    """The Rego and test cases of one policy version. Immutable once written: the engines run these exact modules,
+    never whatever is on disk, so a file edit cannot change a running policy without an approved version."""
+
+    __tablename__ = "policy_bundles"
+    version_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    modules: Mapped[dict] = mapped_column(JSON)  # file name -> Rego text (line endings normalised)
+    cases: Mapped[list] = mapped_column(JSON, default=list)  # expected decisions the Rego must keep producing
+    bundle_hash: Mapped[str] = mapped_column(String(64))  # sha256 of modules and cases
+    origin: Mapped[str] = mapped_column(String(20))  # repository | inherited | edited | backfilled
+    base_version: Mapped[str | None] = mapped_column(String(40), nullable=True)  # active version when drafted
+    checks: Mapped[dict] = mapped_column(JSON, default=dict)  # the automatic checks' report
+    security_approver: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    security_justification: Mapped[str] = mapped_column(Text, default="")
+    security_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class PolicyState(Base):
     __tablename__ = "policy_state"
     id: Mapped[str] = mapped_column(String(20), primary_key=True)

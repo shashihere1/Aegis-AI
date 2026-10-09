@@ -15,12 +15,14 @@ def test_every_staff_role_gets_its_own_account_and_no_account_holds_two_roles():
     users = {u["username"]: u for u in realm["users"]}
     staff = {name: roles for name, _, roles, _ in PERSONAS if roles != ["customer"]}
     # One account per (person, role): a person with two roles gets two accounts.
-    assert len(users) == sum(len(roles) for roles in staff.values()) == len(STAFF_ROLES)
+    assert len(users) == sum(len(roles) for roles in staff.values())
     for user in users.values():
         assert len(user["realmRoles"]) == 1  # never two roles on one login
         assert user["emailVerified"] and user["enabled"] and user["lastName"]
-    held = sorted(role for user in users.values() for role in user["realmRoles"])
-    assert held == sorted(f"aegis-{role}" for role in STAFF_ROLES)  # every role has exactly one account
+    # Every role has an account. Some have two people: a rule change needs a policy approval and a security sign-off
+    # from different people, so the demo has a second security approver.
+    held = {role for user in users.values() for role in user["realmRoles"]}
+    assert held == {f"aegis-{role}" for role in STAFF_ROLES}
     for name, roles in staff.items():
         assert users[name]["realmRoles"] == [f"aegis-{roles[0]}"]  # the person's own username keeps their first role
         for extra in roles[1:]:

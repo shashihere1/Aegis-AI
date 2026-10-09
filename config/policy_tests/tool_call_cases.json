@@ -1,0 +1,1912 @@
+[
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "allow_with_redaction",
+  "obligations": [
+   "redact"
+  ],
+  "rules": []
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "suspended"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "inactive_agent",
+  "obligations": [],
+  "rules": [
+   "AGT-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "env": "PRD",
+     "risk_tier": "critical",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "critical_risk_agent",
+  "obligations": [],
+  "rules": [
+   "RSK-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": []
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "outside_scope_and_purpose",
+  "obligations": [],
+  "rules": [
+   "PUR-001",
+   "SCP-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "missing_entitlement",
+  "obligations": [],
+  "rules": [
+   "ENT-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "internal",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "above_data_ceiling",
+  "obligations": [],
+  "rules": [
+   "DAT-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": false,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "unpinned_tool",
+  "obligations": [],
+  "rules": [
+   "TOOL-001"
+  ]
+ },
+ {
+  "decision": "require_approval",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 25000,
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "high_value_transfer",
+  "obligations": [
+   "rate_limit",
+   "redact"
+  ],
+  "rules": [
+   "PAY-010"
+  ]
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 10000,
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "transfer_at_threshold",
+  "obligations": [
+   "rate_limit",
+   "redact"
+  ],
+  "rules": []
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 25000,
+      "new_beneficiary": false
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "transfer_to_known_beneficiary",
+  "obligations": [
+   "rate_limit",
+   "redact"
+  ],
+  "rules": []
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 25000,
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": {
+     "status": "approved"
+    },
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "approved_transfer",
+  "obligations": [
+   "rate_limit",
+   "redact"
+  ],
+  "rules": []
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 25000,
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": {
+     "status": "mismatch"
+    },
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "mismatched_approval",
+  "obligations": [],
+  "rules": [
+   "APR-001"
+  ]
+ },
+ {
+  "decision": "require_approval",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 100,
+      "new_beneficiary": false
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "env": "PRD",
+     "risk_tier": "high",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "high_risk_agent_financial",
+  "obligations": [
+   "rate_limit",
+   "redact"
+  ],
+  "rules": [
+   "RSK-002"
+  ]
+ },
+ {
+  "decision": "require_approval",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "account": "NL00"
+     },
+     "tool": "core.delete_account"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "core.delete_account"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "destructive",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "destructive_in_production",
+  "obligations": [
+   "redact"
+  ],
+  "rules": [
+   "DES-001"
+  ]
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "account": "NL00"
+     },
+     "tool": "core.delete_account"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "core.delete_account"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "destructive",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "env": "TST",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "destructive_in_test",
+  "obligations": [
+   "redact"
+  ],
+  "rules": []
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document",
+      "pii.unmasked"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "unmasked_pii_scope",
+  "obligations": [],
+  "rules": []
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "to": "x@evil.example"
+     },
+     "tool": "notify.send_email"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [],
+     "id": "mdt_3",
+     "intent_categories": [
+      "comms.external.send"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "notify.send_email"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "external",
+     "intent_tags": [
+      "comms.external.send"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": null,
+     "returns_data_class": "internal",
+     "side_effect": "write",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "clean_egress",
+  "obligations": [],
+  "rules": []
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "to": "x@evil.example"
+     },
+     "tool": "notify.send_email"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [],
+     "id": "mdt_3",
+     "intent_categories": [
+      "comms.external.send"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "notify.send_email"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "confidential",
+     "tainted": true
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "external",
+     "intent_tags": [
+      "comms.external.send"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": null,
+     "returns_data_class": "internal",
+     "side_effect": "write",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "lethal_trifecta",
+  "obligations": [],
+  "rules": [
+   "IFC-001"
+  ]
+ },
+ {
+  "decision": "allow",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": 25000,
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "policy_data": {
+    "approval_side_effects_high_risk": [
+     "financial",
+     "destructive"
+    ],
+    "redact_entities": [
+     "BSN"
+    ],
+    "thresholds": {
+     "payments": {
+      "hitl_amount_eur": 50000
+     }
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "exact",
+  "name": "governed_threshold_raised",
+  "obligations": [
+   "rate_limit",
+   "redact"
+  ],
+  "rules": []
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": "25000",
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_transfer_amount_as_text",
+  "rules": [
+   "ARG-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {
+      "amount": true,
+      "new_beneficiary": true
+     },
+     "tool": "payments.initiate_transfer"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 1,
+     "entitlements": [],
+     "id": "mdt_2",
+     "intent_categories": [
+      "payments.transfer.initiate"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "payments.initiate_transfer"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "internal",
+     "intent_tags": [
+      "payments.transfer.initiate"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": 5,
+     "required_entitlement": null,
+     "returns_data_class": "confidential",
+     "side_effect": "financial",
+     "status": "approved"
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_transfer_amount_as_boolean",
+  "rules": [
+   "ARG-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "top-secret",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_unknown_data_ceiling",
+  "rules": [
+   "DAT-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": "kyc.verify_document pii.unmasked"
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_scopes_given_as_text",
+  "rules": [
+   "SCP-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": [
+      "kyc.verify_document"
+     ]
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_tool_name_not_text",
+  "rules": [
+   "INP-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "properties": {
+     "autonomy": "L1",
+     "env": "PRD",
+     "risk_tier": "medium",
+     "status": "active"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_missing_subject_id",
+  "rules": [
+   "INP-001"
+  ]
+ },
+ {
+  "decision": "deny",
+  "input": {
+   "action": {
+    "name": "tools/call",
+    "properties": {
+     "args": {},
+     "tool": "kyc.verify_document"
+    }
+   },
+   "context": {
+    "approval": null,
+    "mandate": {
+     "chain": [
+      "AGT-1"
+     ],
+     "depth": 0,
+     "entitlements": [
+      "own_kyc"
+     ],
+     "id": "mdt_1",
+     "intent_categories": [
+      "customer.kyc.verify"
+     ],
+     "max_data_class": "confidential",
+     "scopes": [
+      "kyc.verify_document"
+     ]
+    },
+    "session": {
+     "external_egress": false,
+     "max_data_class_read": "public",
+     "tainted": false
+    },
+    "user": {
+     "id": "user:jan"
+    }
+   },
+   "resource": {
+    "id": "kyc.verify_document",
+    "properties": {
+     "egress": "none",
+     "intent_tags": [
+      "customer.kyc.verify"
+     ],
+     "pinned": true,
+     "rate_limit_per_min": null,
+     "required_entitlement": "own_kyc",
+     "returns_data_class": "confidential",
+     "side_effect": "write",
+     "status": "approved",
+     "untrusted_content": false
+    },
+    "type": "mcp_tool"
+   },
+   "subject": {
+    "id": "AGT-1",
+    "properties": {
+     "env": "PRD",
+     "risk_tier": "medium"
+    },
+    "type": "agent"
+   }
+  },
+  "match": "include",
+  "name": "stricter_missing_agent_status",
+  "rules": [
+   "AGT-001"
+  ]
+ }
+]

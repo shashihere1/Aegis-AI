@@ -4,6 +4,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public detail?: unknown, // the server's structured `detail`, when it sent one (e.g. a failed check report)
   ) {
     super(message);
   }
@@ -50,7 +51,10 @@ export async function api<T>(path: string, options: Options = {}, retried = fals
   }
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
-  if (!response.ok) throw new ApiError(response.status, detailMessage(body, `${response.status} ${response.statusText}`));
+  if (!response.ok) {
+    const detail = body && typeof body === "object" && "detail" in body ? (body as { detail: unknown }).detail : undefined;
+    throw new ApiError(response.status, detailMessage(body, `${response.status} ${response.statusText}`), detail);
+  }
   return body as T;
 }
 

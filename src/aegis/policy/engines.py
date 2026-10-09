@@ -5,7 +5,8 @@
 - ``rego``:   the authoritative ``config/policies/tool_call.rego`` evaluated in-process by regopy (rego-cpp),
   so the real Rego runs on any laptop without an OPA binary.
 - ``opa``:    the same Rego evaluated by an Open Policy Agent server through its REST API. Before trusting a decision,
-  Aegis checks that the server runs exactly the Rego this control plane approved.
+  Aegis checks that the server runs exactly the Rego this control plane approved, and it can push that Rego to the
+  server itself (``sync_policy``) when a version is activated.
 
 Every engine receives the governed, approved configuration with each decision (as ``input.policy_data`` for Rego), so
 activating or rolling back a policy version applies immediately and the decision records the version that decided.
@@ -18,8 +19,10 @@ import json
 import queue
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -218,21 +221,25 @@ class RegoRuntime:
         return expressions[0]
 
 
-_RUNTIMES: dict[tuple[str, str], RegoRuntime] = {}
+_RUNTIMES: OrderedDict[tuple[str, str], RegoRuntime] = OrderedDict()
 _RUNTIMES_LOCK = threading.Lock()
+RUNTIME_CACHE_SIZE = 8  # the active policy, a candidate under review and the versions a replay compares against
 
 
 def rego_runtime(policy_dir: str, sources: dict[str, str] | None = None) -> RegoRuntime:
-    """The runtime for these exact sources (cached). Runtimes for older versions of the same policy are dropped."""
+    """The runtime for these exact sources (cached). The few most recently used are kept, so replaying one approved
+    version against another does not rebuild interpreters for every recorded decision."""
     sources = sources if sources is not None else rego_sources(policy_dir)
-    directory = str(Path(policy_dir).resolve())
-    key = (directory, rego_fingerprint(sources))
+    key = (str(Path(policy_dir).resolve()), rego_fingerprint(sources))
     with _RUNTIMES_LOCK:
-        if key not in _RUNTIMES:
-            for stale in [k for k in _RUNTIMES if k[0] == directory]:
-                del _RUNTIMES[stale]
-            _RUNTIMES[key] = RegoRuntime(policy_dir, sources)
-        return _RUNTIMES[key]
+        runtime = _RUNTIMES.get(key)
+        if runtime is None:
+            runtime = _RUNTIMES[key] = RegoRuntime(policy_dir, sources)
+            while len(_RUNTIMES) > RUNTIME_CACHE_SIZE:
+                _RUNTIMES.popitem(last=False)
+        else:
+            _RUNTIMES.move_to_end(key)
+        return runtime
 
 
 def with_policy_data(policy_input: dict, data: dict) -> dict:
@@ -315,6 +322,19 @@ class OpaEngine:
         except ValueError as exc:
             raise PolicyUnavailable("OPA answered with something that is not JSON") from exc
 
+    async def loaded_modules(self) -> list[tuple[str, str, str]]:
+        """What OPA has loaded, as (module id, file name, text with line endings normalised like ours)."""
+        body = await self._get_json("GET", f"{self.base}/v1/policies")
+        modules = body.get("result") if isinstance(body, dict) else None
+        if not isinstance(modules, list):
+            raise PolicyUnavailable("OPA did not list its loaded policies")
+        loaded = []
+        for module in modules:
+            module_id = str(module.get("id", "") if isinstance(module, dict) else "")
+            raw = module.get("raw", "") if isinstance(module, dict) else ""
+            loaded.append((module_id, Path(module_id).name, raw.replace("\r\n", "\n") if isinstance(raw, str) else ""))
+        return loaded
+
     async def verify_policy(self) -> None:
         """Refuse to use an OPA whose loaded Rego is not exactly the approved policy (checked at most every 30 s).
 
@@ -324,15 +344,8 @@ class OpaEngine:
         key = (self.base, self.fingerprint)
         if _OPA_VERIFIED.get(key, 0.0) > time.monotonic():
             return
-        body = await self._get_json("GET", f"{self.base}/v1/policies")
-        modules = body.get("result") if isinstance(body, dict) else None
-        if not isinstance(modules, list):
-            raise PolicyUnavailable("OPA did not list its loaded policies")
         loaded: dict[str, str] = {}
-        for module in modules:
-            name = Path(str(module.get("id", "") if isinstance(module, dict) else "")).name
-            raw = module.get("raw", "") if isinstance(module, dict) else ""
-            raw = raw.replace("\r\n", "\n") if isinstance(raw, str) else ""  # same normalisation as our side
+        for _module_id, name, raw in await self.loaded_modules():
             if self.known_tests.get(name) == raw:
                 continue  # our own unit tests, unchanged: harmless (package aegis.tool_call_test)
             if name in loaded:
@@ -349,6 +362,58 @@ class OpaEngine:
             )
             raise PolicyUnavailable(f"OPA does not run the approved policy: {detail}")
         _OPA_VERIFIED[key] = time.monotonic() + OPA_VERIFY_TTL
+
+    async def runs_no_policy(self) -> bool:
+        """True when OPA has nothing loaded but (at most) our own unit tests: a fresh or restarted, empty server."""
+        return all(self.known_tests.get(name) == raw for _module_id, name, raw in await self.loaded_modules())
+
+    async def _write(self, method: str, module_id: str, text: str | None = None) -> None:
+        url = f"{self.base}/v1/policies/{quote(module_id, safe='')}"
+        headers = {**self.headers, **({"content-type": "text/plain"} if text is not None else {})}
+        content = text.encode("utf-8") if text is not None else None
+        try:
+            response = await asyncio.wait_for(
+                self.http.request(method, url, headers=headers, content=content, timeout=self.timeout), self.timeout
+            )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PolicyUnavailable(f"OPA at {self.base} is unreachable: {type(exc).__name__}") from exc
+        if response.status_code != 200:
+            try:
+                detail = str(response.json().get("message", ""))[:300]
+            except ValueError:
+                detail = ""
+            verb = "store" if text is not None else "remove"
+            raise PolicyUnavailable(f"OPA refused to {verb} {module_id}: HTTP {response.status_code} {detail}".strip())
+
+    async def sync_policy(self) -> dict:
+        """Make OPA run exactly the approved modules, through its policy API. Unknown or duplicate modules are removed
+        first (so a moved rule is never defined twice), then changed modules are replaced in place and missing ones
+        added; our own unchanged unit tests are left alone. Ends by verifying, so it returns only if OPA now runs the
+        approved Rego. Each write is checked by OPA's compiler, which refuses a policy that does not compile."""
+        ours: dict[str, tuple[str, str]] = {}
+        removals: list[str] = []
+        for module_id, name, raw in await self.loaded_modules():
+            if self.known_tests.get(name) == raw:
+                continue
+            if name in self.expected and name not in ours:
+                ours[name] = (module_id, raw)
+            else:
+                removals.append(module_id)
+        plan: dict[str, list[str]] = {"removed": removals, "replaced": [], "added": [], "unchanged": []}
+        for module_id in removals:
+            await self._write("DELETE", module_id)
+        for name, text in self.expected.items():
+            if name not in ours:
+                await self._write("PUT", name, text)
+                plan["added"].append(name)
+            elif ours[name][1] != text:
+                await self._write("PUT", ours[name][0], text)
+                plan["replaced"].append(name)
+            else:
+                plan["unchanged"].append(name)
+        _OPA_VERIFIED.pop((self.base, self.fingerprint), None)
+        await self.verify_policy()
+        return plan
 
     async def evaluate(self, policy_input: dict) -> dict:
         await self.verify_policy()

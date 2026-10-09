@@ -182,14 +182,27 @@ async def test_the_bearer_token_is_sent_when_configured():
 OPA = find_binary()
 
 
-@pytest.fixture
-def real_opa():
+def start_opa(policy_dir="files"):
     if OPA is None:
         pytest.skip("no OPA binary (set AEGIS_OPA_BINARY; CI installs one)")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
-    process = subprocess.Popen(server_command(OPA, port), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    command = server_command(OPA, port) if policy_dir == "files" else server_command(OPA, port, policy_dir=None)
+    return subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), port
+
+
+@pytest.fixture
+def real_opa():
+    yield from serve(*start_opa())
+
+
+@pytest.fixture
+def empty_real_opa():
+    yield from serve(*start_opa(policy_dir=None))
+
+
+def serve(process, port):
     url = f"http://127.0.0.1:{port}"
     try:
         for _ in range(100):
@@ -218,3 +231,23 @@ async def test_a_real_opa_server_decides_exactly_like_the_python_engine(real_opa
 async def test_a_real_opa_server_passes_the_loaded_policy_check(real_opa):
     async with httpx.AsyncClient() as http:
         await OpaEngine(real_opa, POLICY_DIR, http).verify_policy()  # raises if OPA's modules differ from ours
+
+
+async def test_aegis_pushes_approved_rego_into_a_real_opa_and_replaces_it_on_a_change(empty_real_opa):
+    async with httpx.AsyncClient() as http:
+        engine = OpaEngine(empty_real_opa, POLICY_DIR, http, version="pol_a")
+        assert await engine.runs_no_policy()
+        assert (await engine.sync_policy())["added"] == ["tool_call.rego"]
+        for name, (policy_input, expected, rules) in CASES.items():
+            clean, data = python_inputs(policy_input)
+            verdict = await OpaEngine(empty_real_opa, POLICY_DIR, http, data, "pol_a").evaluate(clean)
+            assert verdict["decision"] == expected and {r["rule"] for r in verdict["reasons"]} == rules, name
+        delete = python_inputs(CASES["destructive_in_production"][0])[0]
+        assert (await engine.evaluate(delete))["decision"] == "require_approval"
+        relaxed = {n: t.replace('sprops.env == "PRD"', 'sprops.env == "ACC"') for n, t in engine.expected.items()}
+        changed = OpaEngine(empty_real_opa, POLICY_DIR, http, version="pol_b", sources=relaxed)
+        assert (await changed.sync_policy())["replaced"] == ["tool_call.rego"]
+        assert (await changed.evaluate(delete))["decision"] == "allow"
+        forget_opa_verification()
+        with pytest.raises(PolicyUnavailable, match="does not run the approved policy"):
+            await engine.evaluate(delete)  # the previous version is no longer what OPA runs

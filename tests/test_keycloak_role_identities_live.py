@@ -115,7 +115,8 @@ async def test_the_running_realm_has_exactly_one_account_per_role():
         roles = http.get(f"/users/{found[0]['id']}/role-mappings/realm").json()
         held[username] = sorted(r["name"] for r in roles if r["name"].startswith(kc.KEYCLOAK_ROLE_PREFIX))
     assert held == {username: [role] for username, role in wanted.items()}  # one Aegis role each, the right one
-    assert len(set(wanted.values())) == len(wanted) == 9  # and no two accounts share a role
+    # Every role has an account; security-approver has two people (a rule change needs two independent sign-offs).
+    assert set(wanted.values()) == {f"{kc.KEYCLOAK_ROLE_PREFIX}{role}" for role in kc.STAFF_ROLES}
 
 
 async def test_every_role_account_really_signs_in_and_aegis_sees_exactly_its_role(password, verifier):
@@ -126,7 +127,7 @@ async def test_every_role_account_really_signs_in_and_aegis_sees_exactly_its_rol
         assert persona.username == identity["username"]
         assert persona.roles == [identity["role"]], f"{identity['username']} must hold exactly {identity['role']}"
         seen[identity["username"]] = persona.roles[0]
-    assert sorted(seen.values()) == sorted(kc.STAFF_ROLES)  # nine logins, nine different roles
+    assert len(seen) == len(kc.role_identities()) and set(seen.values()) == set(kc.STAFF_ROLES)  # every role signs in
 
 
 async def test_a_person_with_two_duties_uses_two_logins_with_different_roles(password, verifier):

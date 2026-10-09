@@ -1,12 +1,14 @@
 """Run a local Open Policy Agent server for Aegis (policy_engine=opa).
 
-    python -m aegis_demo.opa_setup start      # serves config/policies on http://127.0.0.1:8181
+    python -m aegis_demo.opa_setup start          # an empty OPA on http://127.0.0.1:8181; Aegis pushes the policy
+    python -m aegis_demo.opa_setup start --files  # OPA loads config/policies (with AEGIS_OPA_PUSH_POLICY=false)
     python -m aegis_demo.opa_setup status | stop | env | check | test
 
 OPA ships as a single binary. Point AEGIS_OPA_BINARY at it, put `opa` on PATH, or save it as
 %USERPROFILE%\\Downloads\\opa\\opa_windows_amd64.exe (on Infosys laptops fetch it through the approved Artifactory
-route; direct GitHub downloads are blocked). The server loads only the runtime Rego (test files are excluded) plus
-data.json; Aegis then refuses to use it unless its loaded policy matches the approved Rego byte for byte.
+route; direct GitHub downloads are blocked). By default OPA starts empty and Aegis pushes the approved Rego (from its
+database, not from these files) through OPA's policy API; either way Aegis refuses to use OPA unless its loaded policy
+matches the approved Rego byte for byte.
 """
 
 import argparse
@@ -49,16 +51,17 @@ def require_binary() -> str:
     return binary
 
 
-def server_command(binary: str, port: int = PORT, policy_dir: Path = POLICY_DIR) -> list[str]:
-    return [
+def server_command(binary: str, port: int = PORT, policy_dir: Path | None = POLICY_DIR) -> list[str]:
+    """`policy_dir=None` starts OPA with no policy at all: Aegis then pushes the approved Rego itself."""
+    command = [
         binary,
         "run",
         "--server",
         f"--addr=127.0.0.1:{port}",
         "--ignore=*_test.rego",  # unit tests are for `opa test`, not for the decision server
         "--log-level=error",
-        str(policy_dir),
     ]
+    return command + ([str(policy_dir)] if policy_dir is not None else [])
 
 
 def healthy(url: str = URL, timeout: float = 0) -> bool:
@@ -79,7 +82,7 @@ def pid_file() -> Path:
     return HOME / "opa.pid"
 
 
-def start() -> None:
+def start(with_files: bool = False) -> None:
     if healthy():
         print(f"OPA is already running at {URL}")
         return
@@ -87,14 +90,18 @@ def start() -> None:
     HOME.mkdir(parents=True, exist_ok=True)
     log = (HOME / "opa.log").open("ab")
     flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0
+    command = server_command(binary, policy_dir=POLICY_DIR if with_files else None)
     process = subprocess.Popen(
-        server_command(binary), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=flags
+        command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=flags
     )
     pid_file().write_text(str(process.pid))
     if not healthy(timeout=20):
         tail = "\n".join((HOME / "opa.log").read_text("utf-8", "replace").splitlines()[-15:])
         raise SystemExit(f"OPA did not become healthy. Last log lines:\n{tail}")
-    print(f"OPA is serving {POLICY_DIR} at {URL}")
+    if with_files:
+        print(f"OPA is serving {POLICY_DIR} at {URL} (set AEGIS_OPA_PUSH_POLICY=false so Aegis only verifies it)")
+    else:
+        print(f"OPA is running at {URL} with no policy: Aegis pushes the approved Rego when it starts")
     print(f"Point Aegis at it (PowerShell):  . .\\.local\\opa\\aegis-opa-env.ps1   (written to {write_env()})")
 
 
@@ -129,9 +136,11 @@ def run_tool(*args: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Local OPA server for Aegis")
     parser.add_argument("action", choices=["start", "stop", "status", "env", "check", "test"])
-    action = parser.parse_args().action
+    parser.add_argument("--files", action="store_true", help="load config/policies at start (Aegis then only verifies)")
+    args = parser.parse_args()
+    action = args.action
     if action == "start":
-        start()
+        start(with_files=args.files)
     elif action == "stop":
         stop()
     elif action == "status":

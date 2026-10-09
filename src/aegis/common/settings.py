@@ -40,6 +40,9 @@ class Settings(BaseModel):
     opa_url: str = "http://localhost:8181"
     opa_timeout_seconds: float = Field(default=2.0, gt=0, le=30)  # whole request; a slow OPA fails closed
     opa_token: str = Field(default="", repr=False)  # bearer token for an authenticating proxy in front of OPA
+    # Aegis pushes each approved Rego version to OPA through its policy API (on activation, rollback and start-up).
+    # Off: OPA's policy is deployed some other way, and Aegis only verifies that OPA runs the approved Rego.
+    opa_push_policy: bool = True
     policy_dir: str = str(REPO_ROOT / "config" / "policies")
 
     hotstore_url: str = ""  # "redis://..." for Valkey; empty -> in-memory (single process only)

@@ -275,9 +275,26 @@ export interface SocSummary {
 export interface Policies {
   engine: string;
   version: string;
-  files: Record<string, string>;
+  files: Record<string, string>; // the Rego the active version runs
   rules: { rule: string; effect: string; message: string }[];
   data: Record<string, unknown>;
+  editing: "configuration-only" | "configuration-and-rules";
+  rules_recorded: boolean;
+}
+
+export interface RulesCheck {
+  passed: boolean;
+  skipped?: string;
+  problems?: string[];
+  cases?: { total: number; passed: number; failed: { name: string; problem: string }[] };
+}
+
+export interface PolicyDiff {
+  version: string;
+  against: string;
+  rules: { file: string; status: string; added_lines: number; removed_lines: number; diff: string }[];
+  configuration: { path: string; before: unknown; after: unknown }[];
+  cases: { before: number; after: number; changed: boolean };
 }
 
 export interface GuardScan {

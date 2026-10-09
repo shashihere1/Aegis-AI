@@ -15,6 +15,13 @@ from aegis.common.settings import Settings
 from aegis_demo.world import FAKE_LLM_URL, running_world
 
 
+def startup_error(exc: BaseException) -> str:
+    """The underlying reasons, not 'unhandled errors in a TaskGroup'."""
+    if isinstance(exc, BaseExceptionGroup):
+        return "; ".join(startup_error(inner) for inner in exc.exceptions)
+    return f"{type(exc).__name__}: {exc}"
+
+
 class DemoServer:
     """ASGI wrapper that starts the in-process world on lifespan start-up and serves its routes."""
 
@@ -63,7 +70,12 @@ class DemoServer:
                 if message["type"] == "lifespan.startup":
                     ready = asyncio.get_running_loop().create_future()
                     self._task = asyncio.create_task(self._own(ready))
-                    self.world = await ready
+                    try:
+                        self.world = await ready
+                    except Exception as exc:
+                        # Tell uvicorn the start failed so it stops, instead of serving requests with no world.
+                        await send({"type": "lifespan.startup.failed", "message": startup_error(exc)})
+                        return
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
                     self._stop.set()

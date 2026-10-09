@@ -117,11 +117,31 @@ from the protected, Git-ignored `connection.json`. Do not expose the passwordles
 
 ## Policy, investigation and telemetry safeguards
 
-Policy configurations are immutable through the API. Replay precedes submission, a different person approves,
+Policy versions are immutable through the API. Replay precedes submission, a different person approves,
 and activation checks the expected current version. Configuration/evaluator hashes must match before use.
 An independent approver may reject a submitted proposal with a required justification; it cannot then activate.
-Supported configuration changes apply to every policy engine (Python mirror, Rego via regopy, OPA); Rego source
-is not edited through the console.
+
+**Rego is part of the version** (`policy_bundles`, hash-verified on every load). The `rego` / `opa` engines evaluate
+the active version's stored Rego, so a file edit, a bad deploy or a tampered checkout cannot change a running decision;
+it only shows up as "the repository differs". A proposed rule change must pass `rules_check.py` before it is saved:
+module names and sizes are bounded, every runtime module must be in package `aegis.tool_call` (so a policy module can
+never declare a `system.*` package, which OPA treats as server configuration), network, introspection and
+non-deterministic builtins are refused anywhere in the text (comments included, so a comment-stripping bug cannot let
+one through), it must compile and return a well-formed verdict, and every test case must still pass. A rule change
+always needs a security sign-off (`security-approver`) in addition to the policy approval, from a different person than
+both the author and the policy approver (`SEC-001` blocks activation until then); so does a configuration change whose
+replay shows any decision becoming more permissive (a higher decision, less redaction or a looser rate limit). Replay
+covers recorded traffic only, which is why rule changes need the sign-off regardless of what replay found. Rollback
+returns to a version that was fully approved when it ran and needs no new sign-off. Limits: proposed Rego is compiled
+and evaluated in the control-plane process (regopy) by people holding `policy-author`; size limits bound it, but treat
+that role as privileged. The python engine is a fixed mirror and accepts configuration changes only.
+
+**Pushing to OPA** (`AEGIS_OPA_PUSH_POLICY`, default on): on activation and rollback Aegis replaces OPA's modules
+through its policy API (unknown modules removed first, OPA's compiler checks each write) and verifies the result before
+committing; if OPA refuses, the previous Rego is put back and nothing is activated. At start-up it pushes the active
+version, and it restores an OPA that restarted empty. It never silently overwrites an OPA that runs other Rego: that
+fails closed until a policy approver, security approver or admin calls `POST /v1/policies/opa/sync` (recorded in the
+ledger). Run OPA so that only the control plane can write to its policy API.
 
 **Policy decision point, fail closed.** Any engine error, timeout (`AEGIS_OPA_TIMEOUT_SECONDS`, whole request),
 unexpected answer (unknown decision or obligation, a deny without a reason) or an OPA that runs different Rego than
