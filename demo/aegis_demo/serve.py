@@ -8,11 +8,15 @@ import asyncio
 import logging
 import os
 import secrets
+from pathlib import Path
 
 import uvicorn
 
 from aegis.common.settings import Settings
 from aegis_demo.world import FAKE_LLM_URL, running_world
+
+DEFAULT_DISCOVERY_SCAN_INTERVAL = 300  # the console scans the identity provider every 5 minutes unless configured
+DEFAULT_LEDGER_CHECKPOINT_INTERVAL = 60  # and signs the ledger tip every minute when there are new entries
 
 
 class DemoServer:
@@ -27,16 +31,25 @@ class DemoServer:
 
     async def _own(self, ready: asyncio.Future) -> None:
         try:
-            from_env = Settings.from_env().model_dump()
+            env = Settings.from_env()
+            from_env = env.model_dump()
             # A disposable demo ignores database and other settings, but identity settings (people's SSO and the
-            # agents' identity provider) and the policy engine choice still apply.
+            # agents' identity provider), the policy engine choice and the discovery schedule still apply.
             sign_in = {
                 k: v
                 for k, v in from_env.items()
-                if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_"))
-                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine"}
+                if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_", "tsa_"))
+                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine", "discovery_scan_interval",
+                         "ledger_checkpoint_interval"}
             }
             overrides = sign_in if self.ephemeral else from_env
+            if "discovery_scan_interval" not in env.model_fields_set:
+                overrides["discovery_scan_interval"] = DEFAULT_DISCOVERY_SCAN_INTERVAL
+            if "ledger_checkpoint_interval" not in env.model_fields_set:
+                overrides["ledger_checkpoint_interval"] = DEFAULT_LEDGER_CHECKPOINT_INTERVAL
+            if not overrides.get("ledger_signing_key_path") and overrides.get("signing_key_path"):
+                # Older .local/connection.json files predate the ledger key: keep it beside the other persistent keys.
+                overrides["ledger_signing_key_path"] = str(Path(overrides["signing_key_path"]).with_name("ledger.pem"))
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):
                 raise RuntimeError(
                     "Run deployment/local-postgres.ps1 first, or explicitly use --ephemeral for a disposable test demo"

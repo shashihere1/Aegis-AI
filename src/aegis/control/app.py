@@ -1,7 +1,8 @@
 """Aegis control plane: registry, identity/STS, approvals, discovery, SOC and evidence (plan §7.3)."""
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +16,7 @@ from aegis.common.crypto import SigningKey
 from aegis.common.settings import Settings
 from aegis.control import (
     approvals,
+    checkpoints,
     discovery,
     evidence,
     identity_sync,
@@ -90,6 +92,14 @@ def create_app(
     agent_http = network_client(settings.keycloak_url) if use_keycloak else None
     context.agent_identity = agent_identity or build_agent_identity(settings, context.idp, agent_http)
     context.telemetry = telemetry.Telemetry(context.db)
+    context.ledger_key = SigningKey.ensure(settings.ledger_signing_key_path, "ledger-1")
+    log.info(
+        "ledger key ready: fingerprint=%s (%s)",
+        context.ledger_key.fingerprint,
+        "persistent" if settings.ledger_signing_key_path else "ephemeral",
+    )
+    tsa_http = network_client(settings.tsa_url) if settings.tsa_url else None
+    context.tsa_http = tsa_http
     # The Gateway authenticates its internal calls by signing with its private key; we verify with the
     # public half only (no shared secret). Supplied in-process in the demo, or loaded from a PEM in Azure.
     context.gateway_service_public_pem = gateway_service_public_pem or (
@@ -110,12 +120,21 @@ def create_app(
                 log.info("identity reconcile: %s", {k: v for k, v in report.items() if v})
             except IdentityUnavailable as exc:
                 log.warning("identity provider unavailable at start-up: %s", exc)
+        background = []
+        if settings.discovery_scan_interval:
+            background.append(asyncio.create_task(discovery.scan_periodically(context)))
+        if settings.ledger_checkpoint_interval:
+            background.append(asyncio.create_task(checkpoints.checkpoint_periodically(context)))
         try:
             yield
         finally:
+            for task in background:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
             await context.telemetry.stop()
             await context.db.engine.dispose()
-            for client in (own_http, agent_http):
+            for client in (own_http, agent_http, tsa_http):
                 if client is not None:
                     await client.aclose()
 
@@ -130,6 +149,7 @@ def create_app(
         discovery,
         soc,
         evidence,
+        checkpoints,
         internal,
         model_controls,
         policies,

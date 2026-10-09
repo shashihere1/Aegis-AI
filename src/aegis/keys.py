@@ -31,6 +31,7 @@ from aegis.common.settings import Settings
 KEY_ROLES = (
     ("sts", "signing_key_path", "sts-1"),
     ("idp", "idp_key_path", "idp-1"),
+    ("ledger", "ledger_signing_key_path", "ledger-1"),
 )
 
 
@@ -58,7 +59,7 @@ def provision(settings: Settings, *, create: bool) -> dict[str, dict[str, str]]:
 def _print(report: dict[str, dict[str, str]]) -> None:
     for role, info in report.items():
         print(
-            f"{role:4}  {info['mode']:10}  kid={info['kid']:8}  "
+            f"{role:6}  {info['mode']:10}  kid={info['kid']:8}  "
             f"fingerprint={info['fingerprint']}  {info['path']}"
         )
 

@@ -29,10 +29,11 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Prompt-injection detection + session taint + **lethal-trifecta breaker** (IFC-001) | ✅ | `src/aegis/guard/`, policies |
 | PII redaction (BSN 11-proof, IBAN, e-mail, phone) as a policy obligation | ✅ | `src/aegis/guard/pii.py` |
 | SOC detections, auto-suspend playbook, **cascade revocation** across delegated mandates | ✅ | `src/aegis/control/soc.py` |
-| Shadow-agent discovery (Gateway traffic + IdP scan), claim / quarantine | ✅ | `src/aegis/control/discovery.py` |
+| Shadow-agent discovery: Gateway traffic (real time) + identity-provider scan (scheduled via `AEGIS_DISCOVERY_SCAN_INTERVAL`, and on demand), claim / quarantine | ✅ (telemetry, code and cloud sources planned, shown as such in the console) | `src/aegis/control/discovery.py` |
 | Re-attestation campaign, leaver → orphaned agents | ✅ (basic) | `registry.py` |
-| Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
-| Auditor-only demo evidence pack: HTML report, JSON records, SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
+| End-to-end lineage user → agents → tools → data → human approvals → **result** (completed / waiting / blocked / failed / revoked), per task and merged across a user's or an agent's recent tasks; the Gateway records each permitted call's real outcome (executed / tool error / failed) | ✅ (outcomes from earlier records show "not recorded", never guessed; the graph holds statuses and counts, not tool data) | `soc.py` (`/v1/lineage/{root}`, `/v1/lineage?subject=…\|agent_id=…`), gateway |
+| Auditor-only demo evidence pack: HTML report, JSON records, **signed** SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
+| Ledger signed at chained checkpoints with a dedicated key (published at `/.well-known/aegis-ledger-key`); optional external RFC 3161 timestamps of each checkpoint hash; rewritten history detected even with recomputed hashes | ✅ (tested against a fake TSA and DigiCert's public TSA; key file locally, Key Vault/HSM planned) | `src/aegis/control/checkpoints.py`, `evidence_verify.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
 | Versioned policy configuration: draft, replay, separate approval, activation and rollback | ✅ (Python PDP configuration) | `src/aegis/control/policies.py` |
 | Policy-only time machine over recorded inputs; never executes tools or payments | ✅ (compatible evaluator versions) | `policies.py` |
@@ -52,9 +53,9 @@ A React + TypeScript console in the look of the Fabric Vibe Studio prototype, on
 | Page | What it shows |
 |---|---|
 | Agent Registry / agent detail | 1,247 agents with filters and CSV export; Passport, explained risk score, capabilities, delegation rules, lifecycle trail, kill switch with blast-radius preview |
-| Shadow Agents · Re-attestation | Findings from Gateway traffic and IdP scans (claim / quarantine); attestation campaigns, enforcement, leaver handling |
+| Shadow Agents · Re-attestation | Discovery-source status (live, scheduled or planned) with the last automatic IdP scan; findings from Gateway traffic and IdP scans (claim / quarantine); attestation campaigns, enforcement, leaver handling |
 | Activity · SOC Dashboard · Alerts | Live decision stream; decisions-per-minute chart, top denied agents, playbook actions; triage drawer with evidence |
-| Agent Lineage | Registry lineage graph plus real OpenTelemetry execution timings, service names and shared trace IDs |
+| Agent Lineage | Per-task graph from user to approvals and a result node, or merged over the last 24 h for a user or an agent (call counts, denials, click a call to filter the decisions); plus real OpenTelemetry execution timings, service names and shared trace IDs |
 | Prompt Injection · Usage & Cost | Detections with highlighted payloads and a scan playground; tokens, cost and latency per agent |
 | Access Control · Approvals | Live Mandates with countdowns and revoke; approval cards bound to the exact action (amount, IBAN, chain) |
 | MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved configuration versions, replay and rollback; reference Rego source; hash-chain verification and evidence export |
@@ -147,11 +148,32 @@ payment then executes by itself) → S4 → SOC Dashboard and Alerts → Reset.
 
 For the evidence finale, switch to **Eva Visser (Auditor)**, open **Audit Ledger**, and download the evidence pack.
 Open `report.html` in the ZIP for the readable story. Extract `verify_pack.py` and run
-`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip"` to recompute its file hashes and ledger chain. The export is
-auditor-only and refuses to download if ledger verification fails. It contains synthetic demo records,
-including approval arguments and policy inputs, so treat the ZIP as confidential. Its manifest is not
-externally signed or timestamped, and the local role gate uses the passwordless dev IdP; this is **not**
-a certified regulatory report or production access control.
+`python .\verify_pack.py "C:\path\to\aegis-evidence-....zip" --expect-key <fingerprint>` (the fingerprint is published
+at `/.well-known/aegis-ledger-key`). It recomputes the file hashes and ledger chain and checks the signed manifest,
+every signed checkpoint and every RFC 3161 timestamp token (signature checks need the `cryptography` package). The
+export is auditor-only, first signs the current ledger tip, and refuses to download if the chain or any signed
+checkpoint does not verify. It contains synthetic demo records, including approval arguments and policy inputs, so
+treat the ZIP as confidential. The local role gate uses the passwordless dev IdP; this is **not** a certified
+regulatory report or production access control.
+
+### Signed checkpoints and external timestamps
+
+The hash chain alone detects a single edited entry, but someone with database control could edit an entry and
+recompute every later hash. Aegis therefore signs the ledger tip at **checkpoints** (every minute in the console when
+there are new entries, on demand, and at every export) with a dedicated ledger key, persisted as
+`.local/keys/ledger.pem` beside the other keys (Key Vault/HSM in production). Checkpoints chain to each other, and
+verification compares the ledger with every one, so a rewritten history fails even when all hashes were recomputed.
+The Audit Ledger page shows *History rewritten* in that case.
+
+Set `AEGIS_TSA_URL` (for example `http://timestamp.digicert.com`) to have the hash of each signed checkpoint
+(never ledger content) timestamped by an independent RFC 3161 authority. Its signed token proves the checkpoint
+existed at that time. If the authority is unreachable, checkpoints stay signed and show *timestamp pending*; they
+are retried, never faked. The pack's `anchors/` tokens can also be checked with
+`openssl ts -verify -in checkpoint-N.tsr -digest <hex> -CAfile <ca-bundle>`.
+
+Limits: a stolen ledger key could sign a false history (hence Key Vault/HSM and external timestamps); a timestamp
+proves *when* a checkpoint existed, not that its events are true; deleting the latest checkpoints is detectable only
+against an earlier exported pack or the authority's tokens, so keep packs outside this system.
 
 ## Run it (Windows, Python 3.14; no Docker needed)
 
@@ -364,14 +386,17 @@ See [configuration, launch commands, demonstration and limitations](docs/live-ag
 `POST /v1/agents` · `POST /v1/agents/{id}/approve|suspend|resume|retire` · `GET /v1/agents/{id}/blast-radius` ·
 `POST /sts/token` (RFC 8693) · `GET /.well-known/jwks.json` · `POST /v1/mcp/servers/{id}/import` ·
 `POST /v1/tools/{id}/approve` · `GET|POST /v1/approvals…` · `GET /v1/alerts` · `GET /v1/decisions` ·
-`GET /v1/lineage/{root}` · `GET /v1/ledger/verify` · Gateway: `POST /gw/mcp/{server}`, `POST /gw/a2a/{agent}`,
+`GET /v1/lineage/{root}` · `GET /v1/lineage?subject=|agent_id=&hours=&limit=` · `GET /v1/ledger/verify` · Gateway: `POST /gw/mcp/{server}`, `POST /gw/a2a/{agent}`,
 `POST /gw/llm/v1/chat/completions`, `GET /gw/.well-known/oauth-protected-resource/mcp/{server}` (RFC 9728).
 
 Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment).
+Ledger signing: `GET /.well-known/aegis-ledger-key` (public) · `GET|POST /v1/ledger/checkpoints`.
 
 Policy lifecycle: `GET|POST /v1/policies/versions` ·
 `POST /v1/policies/{id}/replay|submit|approve|reject|activate|rollback`.
 Investigations: `GET|PATCH /v1/alerts/{id}/case`. Risk: `GET /v1/risk/{agent_id}`.
+Discovery: `GET /v1/discovery/findings` · `GET /v1/discovery/status` (sources, last and next scheduled scan) ·
+`POST /v1/discovery/scan` · `POST /v1/discovery/findings/{id}/claim|quarantine`.
 Measured traces: `GET /v1/traces?root_id=...` or `?trace_id=...`.
 
 ## Demonstrate the new features
@@ -427,7 +452,9 @@ governed editing changes supported configuration, not Rego source; Microsoft Ent
 Azure deployment are not built yet; Keycloak agent identities have been run
 only on a local single-node Keycloak (no clustering, TLS or secret manager). Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
-governance and evidence records now persist in PostgreSQL.
+governance and evidence records now persist in PostgreSQL. The scheduled identity-provider scan runs in every
+control-plane process and keeps its last-run status in memory; with several replicas each would scan (findings are
+de-duplicated) until a database leader lock is added. Telemetry, code-repository and cloud discovery sources are planned.
 
 ## Transparency: what was built when, and AI assistance
 

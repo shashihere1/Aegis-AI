@@ -101,6 +101,7 @@ $taskConfiguration = @{
     internal_token = (New-Object PSCredential('internal', $taskCredentials.InternalToken)).GetNetworkCredential().Password
     signing_key_path = (Join-Path $taskLocal 'keys\sts.pem')
     idp_key_path = (Join-Path $taskLocal 'keys\idp.pem')
+    ledger_signing_key_path = (Join-Path $taskLocal 'keys\ledger.pem')
     identity_state_dir = (Join-Path $taskLocal 'identities')
 }
 [IO.File]::WriteAllText((Join-Path $taskLocal 'connection.json'), ($taskConfiguration | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))

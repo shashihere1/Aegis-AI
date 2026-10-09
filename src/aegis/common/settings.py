@@ -28,6 +28,15 @@ class Settings(BaseModel):
     # PEM file for the STS signing key. Empty -> an ephemeral key is generated at start-up (dev only).
     signing_key_path: str = ""
     idp_key_path: str = ""
+    # Dedicated key that signs ledger checkpoints and evidence manifests (Key Vault/HSM in Azure). Empty -> ephemeral.
+    ledger_signing_key_path: str = ""
+    # Comma-separated fingerprints of retired ledger keys whose old checkpoints must still verify after a rotation.
+    ledger_trusted_keys: str = ""
+    # Seconds between automatic signed checkpoints of the ledger tip. 0 = only on demand and at evidence export.
+    ledger_checkpoint_interval: int = Field(default=0, ge=0, le=86400)
+    # RFC 3161 timestamp authority for external anchoring. Only checkpoint hashes are sent. Empty = not anchored.
+    tsa_url: str = ""
+    tsa_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     identity_state_dir: str = ""  # local development identities; never a production secret store
 
     # python: in-process mirror of the Rego. rego: the Rego itself, in-process via regopy (no binary needed).
@@ -80,6 +89,8 @@ class Settings(BaseModel):
     keycloak_admin_client_id: str = "aegis-control-plane"  # service account holding manage-clients / view-clients
     keycloak_admin_client_secret: str = Field(default="", repr=False)  # Key Vault reference in Azure
     agent_token_ttl: int = 300  # seconds an agent's identity token lives (Keycloak enforces it per client)
+    # Seconds between automatic identity-provider scans for ungoverned identities. 0 = on demand only.
+    discovery_scan_interval: int = Field(default=0, ge=0, le=86400)
 
     mandate_default_ttl: int = 300
     max_delegation_depth: int = 3

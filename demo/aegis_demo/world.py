@@ -333,7 +333,7 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
     settings = Settings(**(values | overrides))
     # Explicit first-time key creation, kept separate from startup: the demo/PostgreSQL console creates
     # any missing persistent keys here, then create_app strictly loads them (and fails closed if gone).
-    if settings.signing_key_path or settings.idp_key_path:
+    if settings.signing_key_path or settings.idp_key_path or settings.ledger_signing_key_path:
         provision_keys(settings, create=True)
     transport = InProcessTransport()
 

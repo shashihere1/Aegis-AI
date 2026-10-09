@@ -1,9 +1,11 @@
 """Auditor-only, self-verifying evidence bundle for the local Aegis demonstration."""
 
+import base64
 import hashlib
 import html
 import io
 import json
+import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,9 +15,10 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aegis.control import ledger
+from aegis.common.crypto import SigningKey
+from aegis.control import checkpoints
 from aegis.control.auth import require_roles
-from aegis.control.context import session
+from aegis.control.context import ControlContext, session
 from aegis.control.identity.idp import Persona
 from aegis.control.tables import (
     Agent,
@@ -25,6 +28,7 @@ from aegis.control.tables import (
     Approval,
     CaseEvent,
     DecisionRecord,
+    LedgerCheckpoint,
     LedgerEntry,
     Mandate,
     PolicyState,
@@ -124,8 +128,18 @@ def record(row, fields: tuple[str, ...]) -> dict:
     return jsonable_encoder({name: getattr(row, name) for name in fields})
 
 
-async def snapshot(s: AsyncSession, generated_by: str, source: str) -> dict:
-    """Read one consistent PostgreSQL snapshot, including policy and investigation evidence."""
+def checkpoint_record(cp: LedgerCheckpoint) -> dict:
+    anchored = cp.anchor_status == "anchored"
+    return {
+        **checkpoints.checkpoint_dict(cp),
+        "jws": cp.jws,
+        "tsa_url": cp.tsa_url,
+        "anchor_file": f"anchors/checkpoint-{cp.number}.tsr" if anchored else None,
+    }
+
+
+async def snapshot(s: AsyncSession, generated_by: str, source: str, trusted: set[str]) -> dict:
+    """Read one consistent PostgreSQL snapshot, including policy, investigation and signing evidence."""
     if s.bind.dialect.name == "postgresql":
         await s.connection(execution_options={"isolation_level": "REPEATABLE READ"})
     tables = {
@@ -145,14 +159,22 @@ async def snapshot(s: AsyncSession, generated_by: str, source: str) -> dict:
     rows = {}
     for name, (model, order) in tables.items():
         rows[name] = (await s.execute(select(model).order_by(order))).scalars().all()
-    integrity = ledger.verify_entries(rows["ledger"])
+    signed = (await s.scalars(select(LedgerCheckpoint).order_by(LedgerCheckpoint.number))).all()
+    records = {name: [record(item, FIELDS[name]) for item in items] for name, items in rows.items()}
+    records["checkpoints"] = [checkpoint_record(cp) for cp in signed]
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "generated_by": generated_by,
         "source": source,
-        "integrity": integrity,
-        "counts": {name: len(items) for name, items in rows.items()},
-        "records": {name: [record(item, FIELDS[name]) for item in items] for name, items in rows.items()},
+        "integrity": checkpoints.verify(list(rows["ledger"]), list(signed), trusted),
+        "counts": {name: len(items) for name, items in records.items()},
+        "records": records,
+        "anchors": {
+            f"anchors/checkpoint-{cp.number}.tsr": base64.b64decode(cp.tsa_response)
+            for cp in signed
+            if cp.anchor_status == "anchored"
+        },
+        "ledger_keys": {cp.key_fingerprint: cp.public_pem for cp in signed},
     }
 
 
@@ -183,6 +205,11 @@ def evidence_index(pack: dict) -> list[dict]:
             "question": "Does the exported audit chain verify?",
             "files": ["records/ledger.json"],
             "observed_records": counts["ledger"],
+        },
+        {
+            "question": "Who signed the audit chain, and when was it externally timestamped?",
+            "files": ["records/checkpoints.json", "keys/ledger-keys.json", "manifest.sig", "anchors/"],
+            "observed_records": counts["checkpoints"],
         },
         {
             "question": "Who reviewed and activated policy changes?",
@@ -232,6 +259,18 @@ def report_html(pack: dict) -> str:
     alert_rows = [(a["ts"], a["id"], a["rule_id"], a["severity"], a["title"]) for a in alerts]
     approval_rows = [(a["created_at"], a["id"], a["tool"], a["status"], a["approver"] or "—") for a in approvals]
     denial_rows = [(d["ts"], d["id"], d["action"], ", ".join(r.get("rule", "") for r in d["reasons"])) for d in denials]
+    signed = pack["records"]["checkpoints"][-12:][::-1]
+    checkpoint_rows = [
+        (
+            str(cp["number"]),
+            f"#{cp['upto_seq']}",
+            cp["created_at"],
+            cp["key_fingerprint"],
+            f"{cp['anchored_at']} · {cp['tsa_signer'] or 'TSA'}" if cp["anchor_status"] == "anchored" else
+            ("pending (retrying)" if cp["anchor_status"] == "pending" else "not configured"),
+        )
+        for cp in signed
+    ]
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Aegis AI · Demo evidence pack</title><style>
@@ -262,47 +301,79 @@ th{{background:#eaf0f7}}.scroll{{overflow-x:auto;border:1px solid #dce5ef;border
 <div class="scroll">{_table(("Requested", "Approval ID", "Tool", "Status", "Approver"), approval_rows)}</div>
 <h2>Recent denied actions</h2>
 <div class="scroll">{_table(("Time", "Decision ID", "Action", "Reason codes"), denial_rows)}</div>
+<h2>Signed checkpoints and external timestamps</h2>
+<p>The ledger tip is signed with the Aegis ledger key at regular checkpoints and at export; each checkpoint names the
+previous one. Rewriting history before a checkpoint fails verification even if every hash is recomputed. Where a
+timestamp authority (RFC 3161) is configured, the hash of each signed checkpoint, never ledger content, is
+timestamped by that independent authority. This pack's manifest is signed with ledger key
+<code>{html.escape(pack["signing_key"])}</code>. Compare it with the fingerprint the bank publishes at
+<code>/.well-known/aegis-ledger-key</code>.</p>
+<div class="scroll">{_table(("Checkpoint", "Covers up to", "Signed at", "Key fingerprint", "External timestamp"),
+                            checkpoint_rows)}</div>
 <h2>How to verify and use this pack</h2>
-<p>Run <code>python verify_pack.py &lt;zip-file&gt;</code> after extracting the verifier. It checks every file hash
-and recomputes the ledger chain. The JSON files contain the exported evidence fields for investigation.</p>
+<p>Run <code>python verify_pack.py &lt;zip-file&gt; --expect-key {html.escape(pack["signing_key"])}</code> after
+extracting the verifier. It checks every file hash, recomputes the ledger chain, and checks the manifest signature,
+every checkpoint signature and every timestamp token (signatures need the <code>cryptography</code> package).
+The JSON files contain the exported evidence fields for investigation.</p>
 <div class="note"><strong>Scope and limitations.</strong> This is synthetic, local-demo evidence from
-{html.escape(pack["source"])}. It is not a certified EU AI Act or DORA report. The hash manifest is not
-externally signed or timestamped; an independent trust anchor is needed to prove authenticity after export.
+{html.escape(pack["source"])}. It is not a certified EU AI Act or DORA report. A signature proves the pack came from
+the holder of the ledger key; a stolen key could sign a false history, which is why production keys belong in an
+HSM-backed key vault and why external timestamps matter. A timestamp proves when a checkpoint existed, not that the
+events in it are true. The verifier checks each timestamp token's signature against the certificate inside it;
+whether that certificate belongs to a trusted authority is a certificate-chain check (<code>openssl ts -verify</code>).
+Keep earlier packs outside this system: they are independent copies of the checkpoints.
 The role gate uses the passwordless demo IdP, not production authentication. Treat the ZIP as confidential
 because approval arguments and policy inputs may contain sensitive data.</div>
 </main></body></html>"""
 
 
-def build_zip(pack: dict) -> bytes:
+def build_zip(pack: dict, key: SigningKey) -> bytes:
     files = {
         f"records/{name}.json": (json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
         for name, rows in pack["records"].items()
     }
+    files.update(pack["anchors"])
+    keys = {**pack["ledger_keys"], key.fingerprint: key.public_pem}
+    files["keys/ledger-keys.json"] = (json.dumps(keys, indent=2, sort_keys=True) + "\n").encode()
     files["evidence_index.json"] = (json.dumps(evidence_index(pack), ensure_ascii=False, indent=2) + "\n").encode()
     files["report.html"] = report_html(pack).encode()
     files["verify_pack.py"] = Path(__file__).with_name("evidence_verify.py").read_bytes()
     files["README.txt"] = (
-        b"Aegis AI demo evidence pack\n\nOpen report.html first. To verify all file hashes and the audit chain, "
-        b"extract verify_pack.py and run: python verify_pack.py <path-to-this-zip>\n\n"
-        b"This pack is synthetic demo data, not a certified regulatory report. The manifest is not externally "
-        b"signed or timestamped. Keep the ZIP confidential; policy inputs and approval arguments may contain "
-        b"sensitive data.\n"
-    )
+        "Aegis AI demo evidence pack\n\nOpen report.html first. To verify all file hashes, the audit chain, the "
+        "signatures and the timestamps, extract verify_pack.py and run:\n"
+        f"  python verify_pack.py <path-to-this-zip> --expect-key {key.fingerprint}\n"
+        "Signature checks need the 'cryptography' package (pip install cryptography).\n\n"
+        "This pack is synthetic demo data, not a certified regulatory report. Keep the ZIP confidential; policy "
+        "inputs and approval arguments may contain sensitive data.\n"
+    ).encode()
     manifest = {
-        "format": "aegis-demo-evidence-pack-v1",
+        "format": "aegis-evidence-pack-v2",
         "generated_at": pack["generated_at"],
         "generated_by": pack["generated_by"],
         "source": pack["source"],
         "counts": pack["counts"],
         "ledger": pack["integrity"],
+        "signing": {
+            "key_fingerprint": key.fingerprint,
+            "checkpoints": pack["counts"]["checkpoints"],
+            "anchored": len(pack["anchors"]),
+        },
         "files": {
             name: {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
             for name, data in sorted(files.items())
         },
-        "limitations": "Hashes and the ledger chain detect changes, but this pack has no external signature "
-        "or timestamp.",
+        "limitations": "Signed by the Aegis ledger key; checkpoint hashes are timestamped only where a timestamp "
+        "authority was configured and reachable. Not a certified regulatory report.",
     }
     files["manifest.json"] = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    files["manifest.sig"] = key.sign(
+        {
+            "typ": "aegis-evidence-manifest",
+            "manifest_sha256": hashlib.sha256(files["manifest.json"]).hexdigest(),
+            "key_fingerprint": key.fingerprint,
+            "iat": int(time.time()),
+        }
+    ).encode()
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, data in sorted(files.items()):
@@ -313,33 +384,38 @@ def build_zip(pack: dict) -> bytes:
 def router() -> APIRouter:
     r = APIRouter(prefix="/v1/evidence", tags=["evidence"])
 
+    def source_of(c: ControlContext) -> str:
+        return "local in-memory SQLite demo" if ":memory:" in c.settings.database_url else "Aegis database"
+
     @r.get("/summary")
     async def summary(
         request: Request, s: AsyncSession = Depends(session), user: Persona = Depends(require_roles("auditor"))
     ):
-        source = (
-            "local in-memory SQLite demo"
-            if ":memory:" in request.app.state.ctx.settings.database_url
-            else "Aegis database"
-        )
-        pack = await snapshot(s, user.username, source)
+        c: ControlContext = request.app.state.ctx
+        pack = await snapshot(s, user.username, source_of(c), checkpoints.trusted_keys(c))
         return {key: pack[key] for key in ("generated_at", "source", "integrity", "counts")}
 
     @r.get("/pack")
     async def download_pack(
         request: Request, s: AsyncSession = Depends(session), user: Persona = Depends(require_roles("auditor"))
     ):
-        source = (
-            "local in-memory SQLite demo"
-            if ":memory:" in request.app.state.ctx.settings.database_url
-            else "Aegis database"
-        )
-        pack = await snapshot(s, user.username, source)
-        if not pack["integrity"]["ok"]:
-            raise HTTPException(409, f"Audit ledger verification failed at entry {pack['integrity']['broken_at_seq']}")
+        c: ControlContext = request.app.state.ctx
+        try:  # sign the current tip first, so the export itself is covered by a checkpoint
+            latest = await checkpoints.create(c)
+        except checkpoints.LedgerBroken as exc:
+            raise HTTPException(409, f"Audit ledger verification failed at entry {exc.seq}") from exc
+        if latest is not None:
+            await checkpoints.anchor_pending(c, [latest.number])
+        pack = await snapshot(s, user.username, source_of(c), checkpoints.trusted_keys(c))
+        integrity = pack["integrity"]
+        if not integrity["ok"]:
+            where = integrity.get("broken_at_seq", integrity.get("at_seq"))
+            reason = f": {integrity['reason']}" if "reason" in integrity else ""
+            raise HTTPException(409, f"Audit ledger verification failed at entry {where}{reason}")
+        pack["signing_key"] = c.ledger_key.fingerprint
         filename = f"aegis-evidence-{datetime.now(UTC):%Y%m%d-%H%M%S}.zip"
         return Response(
-            build_zip(pack),
+            build_zip(pack, c.ledger_key),
             media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',

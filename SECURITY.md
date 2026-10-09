@@ -9,7 +9,9 @@ Aegis is a security control, so it is designed to fail closed:
 - **Containment.** Critical detections suspend the agent, revoke every mandate in its chains and disable its
   IdP identity. Revocation is checked on every request.
 - **Evidence.** Every decision, approval and admin action is appended to a hash-chained ledger
-  (`GET /v1/ledger/verify` detects tampering).
+  (`GET /v1/ledger/verify` detects tampering). The tip is signed at chained checkpoints with a dedicated ledger key,
+  and verification checks the ledger against every checkpoint, so recomputing all hashes after an edit is detected.
+  Optionally each checkpoint hash is timestamped by an RFC 3161 authority (`AEGIS_TSA_URL`); only hashes leave.
 
 The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for Agentic Applications.
 
@@ -116,7 +118,10 @@ Replay evaluates recorded context only, without invoking tools, payment executio
 SOC assignments must name active analysts. Case transitions are validated; resolution/false-positive status
 requires a note. Notes and evidence links are appended to the audit ledger. PostgreSQL triggers reject direct
 UPDATE/DELETE of ledger and case-event rows, and transaction-scoped advisory locks serialize ledger appends.
-Database-owner/admin privileges can bypass those controls: this is not externally anchored, tamper-proof storage.
+Database-owner/admin privileges can bypass those triggers, but not the signed checkpoints: a rewritten history no
+longer matches them unless the ledger signing key itself is also stolen. Keep that key in an HSM-backed Key Vault in
+production, and configure a timestamp authority so checkpoints are also witnessed outside Aegis. Deleting the most
+recent checkpoints is detectable only against an earlier exported pack or the authority's tokens.
 
 Adaptive risk uses recorded decisions and alerts, with a documented warm-up and active-minute median/MAD
 baseline. No training history or scores are fabricated. Effective enforcement cannot reduce inherent risk.

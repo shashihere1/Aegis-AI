@@ -77,6 +77,7 @@ export interface Decision {
   data_class: string | null;
   latency_ms: number;
   redactions: number;
+  outcome: CallOutcome | null;
 }
 
 export interface Alert {
@@ -113,27 +114,40 @@ export interface Task {
   decisions: Partial<Record<DecisionKind, number>>;
 }
 
+export type CallOutcome = "executed" | "tool_error" | "failed" | "denied" | "rate_limited" | "awaiting_approval" | "not_recorded";
+export type TaskOutcome = "revoked" | "failed" | "blocked" | "waiting" | "expired" | "in_progress" | "completed";
+
 export interface LineageNode {
   id: string;
-  kind: "user" | "agent" | "tool" | "data";
+  kind: "user" | "agent" | "tool" | "data" | "approval" | "result";
   label: string;
   status?: string;
   depth?: number;
+  outcome?: CallOutcome | TaskOutcome;
+  outcomes?: Partial<Record<CallOutcome, number>>;
+  approval_status?: string;
+  approver?: string | null;
+  detail?: string;
+  task_outcomes?: Partial<Record<TaskOutcome, number>>;
 }
 
 export interface LineageEdge {
   from: string;
   to: string;
-  kind: "initiated" | "delegated_to" | "invoked" | "read";
+  kind: "initiated" | "delegated_to" | "invoked" | "read" | "approval" | "resulted_in";
+  count: number;
+  decisions: Partial<Record<DecisionKind, number>>;
   decision?: DecisionKind;
   rules?: string[];
   intent?: string;
 }
 
 export interface Lineage {
-  root_id: string;
+  root_id?: string;
   nodes: LineageNode[];
   edges: LineageEdge[];
+  tasks?: number;
+  truncated?: boolean;
 }
 
 export interface Mandate {
@@ -231,13 +245,40 @@ export interface LedgerVerify {
   entries: number;
   tip?: string;
   broken_at_seq?: number;
+  checkpoint?: number;
+  at_seq?: number;
+  reason?: string;
+  checkpoints?: number;
+  signed_upto_seq?: number | null;
+  unsigned_tail?: number;
+  anchored?: number;
 }
 
 export interface EvidenceSummary {
   generated_at: string;
   source: string;
   integrity: LedgerVerify;
-  counts: Record<"agents" | "mandates" | "decisions" | "approvals" | "alerts" | "ledger", number>;
+  counts: Record<"agents" | "mandates" | "decisions" | "approvals" | "alerts" | "ledger" | "checkpoints", number>;
+}
+
+export interface LedgerCheckpoint {
+  number: number;
+  created_at: string;
+  upto_seq: number;
+  entries: number;
+  tip: string;
+  key_fingerprint: string;
+  anchor_status: "not_configured" | "pending" | "anchored";
+  anchored_at: string | null;
+  tsa_signer: string | null;
+  anchor_error: string | null;
+}
+
+export interface LedgerCheckpoints {
+  key: { fingerprint: string; persistent: boolean };
+  interval_seconds: number;
+  anchoring: { configured: boolean; tsa_url: string | null };
+  checkpoints: LedgerCheckpoint[];
 }
 
 export interface Usage {
@@ -313,6 +354,21 @@ export interface StudioStatus {
   kyc_tool_status: Record<string, string>;
   emails_sent: number;
   transfers: { payment_id: string; amount: number; creditor_iban: string }[];
+}
+
+export type DiscoverySourceState = "active" | "scheduled" | "manual" | "planned";
+
+export interface DiscoveryStatus {
+  sources: Record<"gateway" | "idp" | "otel" | "repo" | "cloud", DiscoverySourceState>;
+  idp_scan: {
+    automatic: boolean;
+    interval_seconds: number;
+    next_run_at: string | null;
+    last_run:
+      | { at: string; trigger: "manual" | "scheduled"; actor: string; ok: true; checked: number; ungoverned: number; new: number }
+      | { at: string; trigger: "manual" | "scheduled"; actor: string; ok: false; error: string }
+      | null;
+  };
 }
 
 export interface IdentityStatus {

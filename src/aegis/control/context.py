@@ -32,6 +32,11 @@ class ControlContext:
     telemetry: Any = None
     gateway_service_public_pem: str = ""  # Gateway's public key, to authenticate its internal calls
     llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    discovery_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    ledger_key: SigningKey | None = None  # signs ledger checkpoints and evidence manifests
+    checkpoint_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    tsa_http: httpx.AsyncClient | None = None  # reaches the RFC 3161 timestamp authority
+    discovery_status: dict = field(default_factory=dict)  # last identity-provider scan; in memory, per process
 
     @property
     def sts_issuer(self) -> str:

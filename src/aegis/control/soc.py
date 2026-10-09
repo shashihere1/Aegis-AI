@@ -1,17 +1,18 @@
 """SOC: detections, alerts, response playbooks, decisions, lineage and evidence views (plan §8.10-8.12)."""
 
 import re
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common.ids import new_id
 from aegis.common.models import AgentStatus
-from aegis.control import investigations, ledger
+from aegis.control import checkpoints, investigations, ledger
 from aegis.control.auth import OPERATORS, require_roles
 from aegis.control.context import ControlContext, ctx, session
 from aegis.control.discovery import record_signal
@@ -160,7 +161,167 @@ def decision_dict(d: DecisionRecord, names: dict[str, str]) -> dict:
         "trace_id": d.trace_id,
         "latency_ms": d.latency_ms,
         "redactions": (d.input_snapshot or {}).get("redactions", 0),
+        "outcome": None if d.action.startswith(("a2a:", "sts.")) else call_outcome(d),
     }
+
+
+NOT_EXECUTED = {"deny": "denied", "rate_limited": "rate_limited", "require_approval": "awaiting_approval"}
+FAILED = {"failed", "tool_error"}
+# Most severe first: a merged graph's result node takes the colour of its worst task.
+TASK_OUTCOMES = ("revoked", "failed", "blocked", "waiting", "expired", "in_progress", "completed")
+TASK_LABEL = {
+    "revoked": "Revoked",
+    "failed": "Failed",
+    "blocked": "Blocked by policy",
+    "waiting": "Waiting for approval",
+    "expired": "Expired",
+    "in_progress": "In progress",
+    "completed": "Completed",
+}
+CALL_LABEL = {
+    "executed": "executed",
+    "tool_error": "tool error",
+    "failed": "failed",
+    "denied": "denied",
+    "rate_limited": "rate limited",
+    "awaiting_approval": "held for approval",
+    "not_recorded": "outcome not recorded",
+}
+APPROVAL_LABEL = {
+    "pending": "Awaiting approval",
+    "approved": "Approved by {approver}",
+    "consumed": "Approved by {approver} · used",
+    "rejected": "Rejected by {approver}",
+    "expired": "Approval expired",
+    "cancelled": "Approval cancelled",
+}
+
+
+def call_outcome(d: DecisionRecord) -> str:
+    """What happened to one tool call. Records made before outcomes were stored say so instead of guessing."""
+    if d.decision == "allow":
+        return (d.input_snapshot or {}).get("outcome", "not_recorded")
+    return NOT_EXECUTED.get(d.decision, d.decision)
+
+
+def summarise(counts: Counter) -> str:
+    return " · ".join(f"{n} {label}" for key, label in CALL_LABEL.items() if (n := counts[key]))
+
+
+def task_outcome(root: Mandate, decisions: list[DecisionRecord], approvals: list[Approval]) -> tuple[str, Counter]:
+    """Outcome of one task from its root Mandate, the latest outcome per tool, and its approvals.
+
+    Only statuses and counts are used; never tool results, arguments or customer data."""
+    calls = Counter(call_outcome(d) for d in decisions)
+    latest = {d.action: call_outcome(d) for d in decisions}  # decisions are in time order, so the last one wins
+    expires = root.expires_at if root.expires_at.tzinfo else root.expires_at.replace(tzinfo=UTC)
+    if root.status == "revoked":
+        outcome = "revoked"
+    elif any(a.status == "pending" for a in approvals):
+        outcome = "waiting"
+    elif any(o in FAILED for o in latest.values()):
+        outcome = "failed"
+    elif not calls["executed"] and (calls["denied"] or calls["rate_limited"]):
+        outcome = "blocked"
+    elif root.status == "completed":
+        outcome = "completed"
+    elif expires <= datetime.now(UTC):
+        outcome = "expired"
+    else:
+        outcome = "in_progress"
+    return outcome, calls
+
+
+def lineage_graph(
+    mandates: list[Mandate],
+    decisions: list[DecisionRecord],
+    approvals: list[Approval],
+    names: dict[str, str],
+    aggregate: bool,
+) -> dict:
+    """User -> agents -> tools -> data -> approvals -> result. Repeated hops merge into one edge with counts.
+
+    `aggregate` merges several tasks: approvals are grouped per tool and the result node counts task outcomes."""
+    nodes: dict[str, dict] = {}
+    edges: dict[tuple, dict] = {}
+
+    def edge(frm: str, to: str, kind: str) -> dict:
+        e = edges.setdefault((frm, to, kind), {"from": frm, "to": to, "kind": kind, "count": 0, "decisions": {}})
+        e["count"] += 1
+        return e
+
+    by_id = {m.id: m for m in mandates}
+    for m in mandates:
+        if m.parent_id not in by_id:
+            nodes.setdefault(m.subject, {"id": m.subject, "kind": "user", "label": m.subject.split(":", 1)[-1]})
+        agent = f"agent:{m.agent_id}"
+        node = nodes.setdefault(agent, {"id": agent, "kind": "agent", "label": names.get(m.agent_id, m.agent_id),
+                                        "depth": m.depth})
+        node.update(mandate=m.id, status=m.status, intent_categories=m.intent_categories)
+        node["depth"] = min(node["depth"], m.depth)
+        source = f"agent:{by_id[m.parent_id].agent_id}" if m.parent_id in by_id else m.subject
+        edge(source, agent, "delegated_to" if m.parent_id else "initiated")["intent"] = m.intent
+
+    tool_calls = [d for d in decisions if not d.action.startswith("a2a:")]  # delegations are agent -> agent edges
+    for d in tool_calls:
+        tool = f"tool:{d.action}"
+        outcome = call_outcome(d)
+        node = nodes.setdefault(tool, {"id": tool, "kind": "tool", "label": d.action, "outcomes": {}})
+        node["outcomes"][outcome] = node["outcomes"].get(outcome, 0) + 1
+        node["outcome"] = outcome
+        e = edge(f"agent:{d.agent_id}", tool, "invoked")
+        e["decisions"][d.decision] = e["decisions"].get(d.decision, 0) + 1
+        e.update(decision=d.decision, rules=[r.get("rule") for r in d.reasons], decision_id=d.id)
+        if d.data_class and d.decision == "allow" and outcome not in FAILED:
+            data = f"data:{d.data_class}"
+            nodes.setdefault(data, {"id": data, "kind": "data", "label": d.data_class})
+            edge(tool, data, "read")
+
+    for a in approvals:
+        tool = f"tool:{a.tool}"
+        nodes.setdefault(tool, {"id": tool, "kind": "tool", "label": a.tool, "outcomes": {}})
+        key = f"approval:{a.tool}" if aggregate else f"approval:{a.id}"
+        node = nodes.setdefault(key, {"id": key, "kind": "approval", "statuses": {}})
+        node["statuses"][a.status] = node["statuses"].get(a.status, 0) + 1
+        if not aggregate:
+            node.update(approval_status=a.status, approver=a.approver,
+                        label=APPROVAL_LABEL.get(a.status, a.status).format(approver=a.approver or "—"))
+        edge(tool, key, "approval")
+    if aggregate:
+        for node in nodes.values():
+            if node["kind"] == "approval":
+                node["label"] = " · ".join(f"{n} {status}" for status, n in node["statuses"].items())
+
+    by_root: dict[str, tuple] = {}
+    for m in mandates:
+        if m.parent_id is None:
+            ids = {x.id for x in mandates if x.root_id == m.root_id}
+            by_root[m.root_id] = task_outcome(
+                m,
+                [d for d in tool_calls if d.root_id == m.root_id],
+                [a for a in approvals if a.mandate_id in ids],
+            )
+    if by_root:
+        tasks = Counter(outcome for outcome, _ in by_root.values())
+        calls = sum((c for _, c in by_root.values()), Counter())
+        worst = next(o for o in TASK_OUTCOMES if tasks[o])
+        if aggregate:
+            result = {"id": "result:tasks", "kind": "result", "label": f"{sum(tasks.values())} tasks",
+                      "outcome": worst, "task_outcomes": dict(tasks),
+                      "detail": " · ".join(f"{tasks[o]} {TASK_LABEL[o].lower()}" for o in TASK_OUTCOMES if tasks[o])}
+        else:
+            root = next(m for m in mandates if m.parent_id is None)
+            detail = summarise(calls) or "no tool calls"
+            if worst == "revoked" and root.revoked_reason:
+                detail = f"{root.revoked_reason} · {detail}"
+            result = {"id": f"result:{root.root_id}", "kind": "result", "label": TASK_LABEL[worst],
+                      "outcome": worst, "detail": detail}
+        result["calls"] = dict(calls)
+        leaves = [n for n in nodes if n not in {f for f, _, _ in edges}]
+        nodes[result["id"]] = result
+        for leaf in leaves:
+            edge(leaf, result["id"], "resulted_in")
+    return {"nodes": list(nodes.values()), "edges": list(edges.values())}
 
 
 def router() -> APIRouter:
@@ -207,10 +368,16 @@ def router() -> APIRouter:
         agent_id: str | None = None,
         root_id: str | None = None,
         decision: str | None = None,
+        subject: str | None = None,
+        hours: int | None = Query(None, ge=1, le=720),
         limit: int = 100,
         s: AsyncSession = Depends(session),
     ):
         query = select(DecisionRecord).order_by(DecisionRecord.ts.desc())
+        if subject:
+            query = query.where(DecisionRecord.subject == subject)
+        if hours:
+            query = query.where(DecisionRecord.ts >= datetime.now(UTC) - timedelta(hours=hours))
         if agent_id:
             query = query.where(DecisionRecord.agent_id == agent_id)
         if root_id:
@@ -271,69 +438,58 @@ def router() -> APIRouter:
             )
         return out
 
+    async def lineage_records(s: AsyncSession, root_ids: list[str]):
+        mandates = (
+            await s.scalars(select(Mandate).where(Mandate.root_id.in_(root_ids)).order_by(Mandate.issued_at))
+        ).all()
+        decisions = (
+            await s.scalars(
+                select(DecisionRecord).where(DecisionRecord.root_id.in_(root_ids)).order_by(DecisionRecord.ts)
+            )
+        ).all()
+        approvals = (
+            await s.scalars(
+                select(Approval)
+                .where(Approval.mandate_id.in_([m.id for m in mandates]))
+                .order_by(Approval.created_at)
+            )
+        ).all()
+        names = await agent_names(s, [m.agent_id for m in mandates])
+        return mandates, decisions, approvals, names
+
     @r.get("/lineage/{root_id}")
     async def lineage(root_id: str, s: AsyncSession = Depends(session)):
-        """User -> agents -> tools -> data for one task (plan §8.10)."""
-        mandates = (
-            (await s.execute(select(Mandate).where(Mandate.root_id == root_id).order_by(Mandate.issued_at)))
-            .scalars()
-            .all()
-        )
+        """User -> agents -> tools -> data -> approvals -> result for one task (plan §8.10)."""
+        mandates, decisions, approvals, names = await lineage_records(s, [root_id])
         if not mandates:
             raise HTTPException(404, "unknown task")
-        decisions = (
-            (
-                await s.execute(
-                    select(DecisionRecord).where(DecisionRecord.root_id == root_id).order_by(DecisionRecord.ts)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        names = await agent_names(s, [m.agent_id for m in mandates])
-        subject = mandates[0].subject
-        nodes = {subject: {"id": subject, "kind": "user", "label": subject.split(":", 1)[-1]}}
-        edges = []
-        by_id = {m.id: m for m in mandates}
-        for m in mandates:
-            nodes[f"agent:{m.agent_id}"] = {
-                "id": f"agent:{m.agent_id}",
-                "kind": "agent",
-                "mandate": m.id,
-                "status": m.status,
-                "label": names.get(m.agent_id, m.agent_id),
-                "depth": m.depth,
-                "intent_categories": m.intent_categories,
-            }
-            source = f"agent:{by_id[m.parent_id].agent_id}" if m.parent_id in by_id else subject
-            edges.append(
-                {
-                    "from": source,
-                    "to": f"agent:{m.agent_id}",
-                    "kind": "delegated_to" if m.parent_id else "initiated",
-                    "intent": m.intent,
-                }
-            )
-        for d in decisions:
-            if d.action.startswith("a2a:"):
-                continue  # delegations are already drawn as agent -> agent edges
-            target = f"tool:{d.action}"
-            nodes[target] = {"id": target, "kind": "tool", "label": d.action}
-            edges.append(
-                {
-                    "from": f"agent:{d.agent_id}",
-                    "to": target,
-                    "kind": "invoked",
-                    "decision": d.decision,
-                    "rules": [r.get("rule") for r in d.reasons],
-                    "decision_id": d.id,
-                }
-            )
-            if d.data_class and d.decision == "allow":
-                data = f"data:{d.data_class}"
-                nodes[data] = {"id": data, "kind": "data", "label": d.data_class}
-                edges.append({"from": target, "to": data, "kind": "read"})
-        return {"root_id": root_id, "nodes": list(nodes.values()), "edges": edges}
+        return {"root_id": root_id, **lineage_graph(mandates, decisions, approvals, names, aggregate=False)}
+
+    @r.get("/lineage")
+    async def lineage_across_tasks(
+        subject: str | None = None,
+        agent_id: str | None = None,
+        hours: int = Query(24, ge=1, le=720),
+        limit: int = Query(50, ge=1, le=200),
+        s: AsyncSession = Depends(session),
+    ):
+        """One merged graph over recent tasks, for a user or an agent. Capped; the response says when it is."""
+        since = datetime.now(UTC) - timedelta(hours=hours)
+        query = select(Mandate).where(Mandate.parent_id.is_(None), Mandate.issued_at >= since)
+        if subject:
+            query = query.where(Mandate.subject == subject)
+        if agent_id:
+            involved = select(Mandate.root_id).where(Mandate.agent_id == agent_id)
+            query = query.where(Mandate.root_id.in_(involved))
+        roots = (await s.scalars(query.order_by(Mandate.issued_at.desc()).limit(limit + 1))).all()
+        truncated = len(roots) > limit
+        root_ids = [m.root_id for m in roots[:limit]]
+        scope = {"subject": subject, "agent_id": agent_id, "hours": hours, "limit": limit}
+        if not root_ids:
+            return {"scope": scope, "tasks": 0, "truncated": False, "nodes": [], "edges": []}
+        mandates, decisions, approvals, names = await lineage_records(s, root_ids)
+        graph = lineage_graph(mandates, decisions, approvals, names, aggregate=True)
+        return {"scope": scope, "tasks": len(root_ids), "truncated": truncated, **graph}
 
     @r.get("/soc/summary")
     async def soc_summary(minutes: int = 30, s: AsyncSession = Depends(session)):
@@ -460,8 +616,9 @@ def router() -> APIRouter:
         ]
 
     @r.get("/ledger/verify")
-    async def ledger_verify(s: AsyncSession = Depends(session)):
-        return await ledger.verify(s)
+    async def ledger_verify(c=Depends(ctx), s: AsyncSession = Depends(session)):
+        entries, signed = await checkpoints.load(s)
+        return checkpoints.verify(entries, signed, checkpoints.trusted_keys(c))
 
     @r.get("/usage")
     async def usage(s: AsyncSession = Depends(session)):

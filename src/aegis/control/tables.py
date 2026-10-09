@@ -226,6 +226,29 @@ class LedgerEntry(Base):
     entry_hash: Mapped[str] = mapped_column(String(64))
 
 
+class LedgerCheckpoint(Base):
+    """A signed statement of the ledger tip at an entry number; optionally timestamped by an RFC 3161 TSA."""
+
+    __tablename__ = "ledger_checkpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    number: Mapped[int] = mapped_column(Integer, unique=True)
+    created_at: Mapped[str] = mapped_column(String(40))
+    upto_seq: Mapped[int] = mapped_column(Integer)
+    entries: Mapped[int] = mapped_column(Integer)
+    tip: Mapped[str] = mapped_column(String(64))
+    prev: Mapped[str] = mapped_column(String(64))  # SHA-256 of the previous checkpoint's JWS
+    key_fingerprint: Mapped[str] = mapped_column(String(64))
+    public_pem: Mapped[str] = mapped_column(Text)
+    jws: Mapped[str] = mapped_column(Text)
+    anchor_status: Mapped[str] = mapped_column(String(16))  # not_configured | pending | anchored
+    tsa_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    tsa_response: Mapped[str | None] = mapped_column(Text, nullable=True)  # base64 DER TimeStampResp
+    anchored_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    tsa_signer: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    anchor_error: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    anchor_attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class PolicyVersion(Base):
     __tablename__ = "policy_versions"
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
