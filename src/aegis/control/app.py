@@ -2,10 +2,12 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from aegis import telemetry
@@ -50,6 +52,7 @@ def create_app(
     http: httpx.AsyncClient,
     hotstore: HotStore | None = None,
     agent_identity: AgentIdentityProvider | None = None,
+    gateway_service_public_pem: str = "",
 ) -> FastAPI:
     context = ControlContext(
         settings=settings,
@@ -87,6 +90,13 @@ def create_app(
     agent_http = network_client(settings.keycloak_url) if use_keycloak else None
     context.agent_identity = agent_identity or build_agent_identity(settings, context.idp, agent_http)
     context.telemetry = telemetry.Telemetry(context.db)
+    # The Gateway authenticates its internal calls by signing with its private key; we verify with the
+    # public half only (no shared secret). Supplied in-process in the demo, or loaded from a PEM in Azure.
+    context.gateway_service_public_pem = gateway_service_public_pem or (
+        Path(settings.gateway_service_public_key_path).read_text(encoding="utf-8")
+        if settings.gateway_service_public_key_path
+        else ""
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -132,6 +142,14 @@ def create_app(
     ):
         app.include_router(module.router())
     app.add_middleware(telemetry.TraceMiddleware, telemetry=context.telemetry, service="aegis.control")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        max_age=600,
+    )
 
     @app.exception_handler(IdentityUnavailable)
     async def identity_unavailable(request: Request, exc: IdentityUnavailable):

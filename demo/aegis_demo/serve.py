@@ -89,6 +89,15 @@ if __name__ == "__main__":
             f"Built-in SSO provider on. Sign in at the console with any demo account (e.g. sanne.bakker); "
             f"password for this run: {sso_password}"
         )
-    print(f"Aegis console: http://127.0.0.1:{port}/ui/   ·   API docs: http://127.0.0.1:{port}/docs")
+    # TLS: when a certificate and key are configured, uvicorn terminates HTTPS directly. In Azure, TLS is
+    # terminated at the Container Apps ingress (and data-plane ↔ control-plane runs over the environment's mTLS),
+    # so these are typically left empty there.
+    tls = Settings.from_env()
+    ssl_kwargs = {}
+    scheme = "http"
+    if tls.tls_cert_file and tls.tls_key_file:
+        ssl_kwargs = {"ssl_certfile": tls.tls_cert_file, "ssl_keyfile": tls.tls_key_file}
+        scheme = "https"
+    print(f"Aegis console: {scheme}://127.0.0.1:{port}/ui/   ·   API docs: {scheme}://127.0.0.1:{port}/docs")
     server = DemoServer(ephemeral=args.ephemeral, sso_password=sso_password)
-    uvicorn.run(server, host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(server, host="127.0.0.1", port=port, log_level="warning", **ssl_kwargs)

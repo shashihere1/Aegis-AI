@@ -86,8 +86,21 @@ class Settings(BaseModel):
     approval_hold_seconds: float = 0.0  # how long the gateway holds a call waiting for approval
     auto_suspend_on_critical: bool = True
 
-    # Shared secret for gateway -> control-plane internal calls (Key Vault reference in Azure).
-    internal_token: str = Field(default="dev-internal-token", repr=False)
+    # Gateway → control-plane service identity (asymmetric; no shared secret).
+    # The Gateway signs each internal call with its private ES256 key; the control plane verifies with
+    # the public half only, so it cannot forge Gateway tokens. Private key in Key Vault in Azure.
+    # Both empty in local single-process mode: an ephemeral key pair is generated and wired in-process.
+    gateway_service_key_path: str = ""  # Gateway side: the private signing key (PEM).
+    gateway_service_public_key_path: str = ""  # Control side: the Gateway's public key (PEM) to verify.
+
+    # CORS: comma-separated origins the browser console is served from.
+    # In production set this to the exact frontend URL (no trailing slash, no wildcards).
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000"
+
+    # TLS: paths to a PEM certificate and private key for direct uvicorn TLS termination.
+    # Leave empty when TLS is handled by a reverse proxy or Azure Container Apps ingress (recommended).
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
 
     # Gateway caches (seconds). 0 disables caching, which tests use for determinism.
     cache_seconds: float = 2.0

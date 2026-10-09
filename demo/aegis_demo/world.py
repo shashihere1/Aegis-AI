@@ -16,12 +16,16 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from aegis.common.crypto import SigningKey
 from aegis.common.ids import agent_id as new_agent_id
 from aegis.common.models import AgentStatus
+from aegis.common.service_identity import mint_service_token
 from aegis.common.settings import REPO_ROOT, Settings
 from aegis.control.app import create_app
 from aegis.control.identity.agent_identity import IdentityNotFound
@@ -113,6 +117,10 @@ class World:
 
     def token(self, username: str) -> str:
         return self.ctx.idp.login(username)
+
+    def internal_headers(self) -> dict:
+        """A valid Gateway → control-plane service assertion, for tests that call /internal/* directly."""
+        return {"x-aegis-internal": mint_service_token(self.gateway.state.service_key)}
 
     async def api(self, username: str, method: str, path: str, **kwargs) -> httpx.Response:
         headers = {"authorization": f"Bearer {self.token(username)}", **kwargs.pop("headers", {})}
@@ -333,13 +341,19 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
     http = httpx.AsyncClient(transport=transport, timeout=60.0, event_hooks={"request": [inject_trace]})
     hotstore = MemoryHotStore()
     identity = agent_identity_factory(settings, http) if agent_identity_factory else None
-    control = create_app(settings, http, hotstore, agent_identity=identity)
+    # One Gateway service identity: the control plane receives its public half only, so it verifies the
+    # Gateway's internal calls without holding anything that could forge them.
+    gateway_service_key = SigningKey.load_or_generate(settings.gateway_service_key_path, "gw-svc-1")
+    control = create_app(
+        settings, http, hotstore, agent_identity=identity, gateway_service_public_pem=gateway_service_key.public_pem
+    )
     gateway = create_gateway(
         settings,
         http,
         hotstore,
         ManagedEngine(control.state.ctx),
         telemetry=control.state.ctx.telemetry,
+        service_key=gateway_service_key,
     )
     servers = {name: factory().streamable_http_app() for name, factory in SERVERS.items()}
     kyc_app, payments_app = kyc_agent_app(), payments_agent_app()
@@ -361,6 +375,7 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
         if UI_DIST.exists()
         else []
     )
+    allowed_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     composite = Starlette(
         routes=[
             Mount("/gw", gateway),
@@ -372,7 +387,17 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
             *extra_routes,
             *ui,
             Mount("/", control),
-        ]
+        ],
+        middleware=[
+            Middleware(
+                CORSMiddleware,
+                allow_origins=allowed_origins,
+                allow_credentials=True,
+                allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+                allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+                max_age=600,
+            )
+        ],
     )
     transport.app = composite
     async with AsyncExitStack() as stack:
