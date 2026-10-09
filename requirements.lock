@@ -40,6 +40,7 @@ python-dotenv==1.2.4
 python-multipart==0.0.32
 pywin32==312
 referencing==0.37.0
+regopy==1.5.2
 rpds-py==2026.9.1
 ruff==0.16.10
 SQLAlchemy==2.1.3

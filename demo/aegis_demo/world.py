@@ -30,7 +30,7 @@ from aegis.control.policies import ManagedEngine
 from aegis.control.tables import Agent, McpServer
 from aegis.gateway.app import create_gateway
 from aegis.hotstore import MemoryHotStore
-from aegis.policy.engine import make_engine
+from aegis.keys import provision as provision_keys
 from aegis.sdk import AegisAgent
 from aegis.telemetry import TraceMiddleware, tracing_headers
 from aegis_demo import catalog
@@ -320,6 +320,10 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
             },
         }
     settings = Settings(**(values | overrides))
+    # Explicit first-time key creation, kept separate from startup: the demo/PostgreSQL console creates
+    # any missing persistent keys here, then create_app strictly loads them (and fails closed if gone).
+    if settings.signing_key_path or settings.idp_key_path:
+        provision_keys(settings, create=True)
     transport = InProcessTransport()
 
     async def inject_trace(request):
@@ -334,9 +338,7 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
         settings,
         http,
         hotstore,
-        ManagedEngine(
-            control.state.ctx, make_engine(settings.policy_engine, settings.policy_dir, settings.opa_url, http)
-        ),
+        ManagedEngine(control.state.ctx),
         telemetry=control.state.ctx.telemetry,
     )
     servers = {name: factory().streamable_http_app() for name, factory in SERVERS.items()}

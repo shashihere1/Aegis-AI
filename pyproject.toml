@@ -29,6 +29,8 @@ dependencies = [
 postgres = ["asyncpg>=0.31"]
 valkey = ["redis>=6"]
 agents = ["langgraph==1.2.14", "agent-framework-core==1.21.0"]
+# policy_engine=rego: the authoritative Rego evaluated in-process (Windows wheels for Python 3.14).
+rego = ["regopy==1.5.2"]
 dev = ["pytest>=8", "pytest-asyncio>=1.0", "ruff>=0.16"]
 
 [tool.hatch.build.targets.wheel]

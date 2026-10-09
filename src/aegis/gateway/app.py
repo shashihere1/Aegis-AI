@@ -9,6 +9,7 @@ forwarded upstream: upstream credentials are brokered by the Gateway.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -26,8 +27,12 @@ from aegis.gateway.llm import AzureChatUpstream, LlmError, bounded_chat, complet
 from aegis.guard import pii
 from aegis.guard.detectors import scan_text
 from aegis.hotstore import HotStore
+from aegis.policy.arguments import argument_problem, refuse_arguments
 from aegis.policy.engine import PolicyEngine
+from aegis.policy.engines import fail_closed, normalize
 from aegis.telemetry import tracing_headers
+
+log = logging.getLogger("aegis.gateway")
 
 MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
 DENIED, APPROVAL_PENDING, RATE_LIMITED = -32001, -32002, -32003
@@ -338,7 +343,19 @@ def create_gateway(
                 "approval": approval_ctx,
             },
         }
-        verdict = await engine.evaluate(policy_input)
+        problem = argument_problem(arguments)
+        if problem:  # refused before any engine sees them; recorded like every other deny
+            verdict = refuse_arguments(getattr(engine, "version", ""), problem)
+        else:
+            try:
+                raw = await engine.evaluate(policy_input)
+                # Keep the version the engine stamped: engine.version is shared and may already name a newer version
+                # activated while this decision was being made.
+                stamped = raw.get("policy_version") if isinstance(raw, dict) else None
+                verdict = normalize(raw, stamped or getattr(engine, "version", ""))
+            except Exception as exc:  # fail closed, and keep the evidence (the deny below is recorded)
+                log.error("policy decision point failed for %s: %s", tool_id, exc)
+                verdict = fail_closed(getattr(engine, "version", ""), exc)
         span.set_attributes(
             {
                 "aegis.decision": verdict["decision"],
@@ -689,6 +706,6 @@ def create_gateway(
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "policy_version": engine.version}
+        return {"status": "ok", "policy_version": engine.version, "policy_engine": settings.policy_engine}
 
     return app

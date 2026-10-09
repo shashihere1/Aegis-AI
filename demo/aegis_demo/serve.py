@@ -29,12 +29,12 @@ class DemoServer:
         try:
             from_env = Settings.from_env().model_dump()
             # A disposable demo ignores database and other settings, but identity settings (people's SSO and the
-            # agents' identity provider) still apply.
+            # agents' identity provider) and the policy engine choice still apply.
             sign_in = {
                 k: v
                 for k, v in from_env.items()
-                if k.startswith(("oidc_", "builtin_oidc", "keycloak_"))
-                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl"}
+                if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_"))
+                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine"}
             }
             overrides = sign_in if self.ephemeral else from_env
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):

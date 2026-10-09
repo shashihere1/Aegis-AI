@@ -1,0 +1,2 @@
+# Rego is compared byte-for-byte with what an OPA server loaded; keep one line ending on every checkout.
+*.rego text eol=lf

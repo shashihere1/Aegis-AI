@@ -41,7 +41,8 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
 | React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
 | Sign-in for people through any OpenID Connect provider (Keycloak, Microsoft Entra ID, Okta...): authorization code + PKCE, signature/issuer/audience/expiry checks, provider roles mapped to Aegis roles; dev login can be switched off | ✅ (tested against a fake provider and a built-in one; not yet against a live Keycloak or Entra tenant) | `src/aegis/control/identity/oidc.py`, `users.py`, `web/src/lib/auth.ts` |
-| Regulatory-grade evidence packs, Copilot, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities and managed OPA policy publishing | ⏳ remaining | — |
+| **Three policy engines on one governed policy**: the Python mirror, the authoritative Rego in-process (regopy), and an OPA server that must run exactly the approved Rego; any engine failure is a recorded deny | ✅ (OPA server tested against a fake OPA here; the real-OPA tests run in CI) | `src/aegis/policy/engines.py`, `config/policies/` |
+| Regulatory-grade evidence packs, Copilot, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities, publishing Rego *source* changes through governance | ⏳ remaining | — |
 
 ## The console
 
@@ -90,7 +91,7 @@ python -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.lock      # through the Infy Artifactory mirror
 .venv\Scripts\python -m pip install --no-build-isolation --no-deps -e .
 .\deployment\local-postgres.ps1 -Action Start                 # uses installed PostgreSQL 18; loopback port 55432
-.venv\Scripts\python -m pytest                                 # 11 OPA-conformance tests need an opa binary
+.venv\Scripts\python -m pytest                                 # tests needing a real OPA binary skip without one (CI has it)
 .venv\Scripts\python -m aegis_demo.run                         # narrated demo of scenes S0-S5, S8
 .venv\Scripts\python -m aegis_demo.serve                       # console /ui, API docs /docs and /gw/docs (--port to change)
 ```
@@ -150,9 +151,30 @@ save it as `Downloads\keycloak\keycloak-quarkus-dist-26.2.5.zip`. `JAVA_HOME` mu
 .venv\Scripts\python -m aegis_demo.keycloak_setup stop        # also: status | env | reset
 ```
 
-The realm is generated from the demo personas (same usernames and roles; every user shares one generated password,
-printed by `start` and kept in `.local/keycloak/credentials.json`, which is git-ignored). The `aegis-console` client
+The realm is generated from the demo personas. **Every Aegis role has its own account and no account holds two roles**:
+a person who acts in several roles gets one login per role (for example `priya.raman` registers agents and
+`priya.raman.policy-author` drafts policy), so duties cannot be combined on one identity. All accounts share one generated
+password, printed by `start` and kept in `.local/keycloak/credentials.json` (git-ignored). The `aegis-console` client
 is public with S256 PKCE and exact redirect URIs. Stop the built-in `--sso` server first if it is using port 8000.
+
+| Account | Aegis role | Person |
+|---|---|---|
+| `priya.raman` | agent-developer | Priya Raman |
+| `priya.raman.policy-author` | policy-author | Priya Raman |
+| `niels.vandijk` | agent-owner | Niels van Dijk |
+| `sanne.bakker` | risk-approver | Sanne Bakker |
+| `mark.jansen` | soc-analyst | Mark Jansen |
+| `fatima.elamrani` | security-approver | Fatima El Amrani |
+| `fatima.elamrani.policy-approver` | policy-approver | Fatima El Amrani |
+| `eva.visser` | auditor | Eva Visser |
+| `admin` | admin | Platform Admin |
+
+**Changing role means signing in as the other account.** Use the header menu: **Switch account** (or **Sign in with SSO**) first ends your Keycloak session, then shows a fresh login form, so you pick the account. (Keycloak otherwise keeps you signed in and would silently log you straight back in as the previous account, and even `prompt=login` only re-asks that same user's password.) Choosing a demo persona from the menu while signed in with SSO also ends the Keycloak session. Token expiry renews silently. For a fast demo keep two browser windows, one signed in per role, or use the persona switcher.
+
+The env script sets `AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT=true`: Aegis then **refuses any sign-in whose token holds more than
+one Aegis role** (with a message telling the user to use a separate account per role). The demo personas of the built-in
+dev IdP are unaffected. `keycloak_setup accounts` prints this directory; `keycloak_setup ensure-role-identities` upgrades
+an already running realm to it (`start` does this too, and repeating it is safe).
 
 ### Agent identities in Keycloak
 
@@ -182,6 +204,42 @@ as orphaned; `clean-agents` clears them. Tests: `tests/test_agent_identity.py` (
 (whole system with a fake), and `tests/test_keycloak_agent_identity_live.py` / `tests/test_keycloak_world_live.py` (a real Keycloak,
 skipped when it is not running).
 
+### Policy engines: Python, Rego, OPA
+
+The tool-call policy is written in Rego (`config/policies/tool_call.rego`, the authoritative version). Three engines
+can make decisions with it, chosen by `AEGIS_POLICY_ENGINE`:
+
+| Engine | What evaluates the policy | Needs |
+|---|---|---|
+| `python` (default) | An in-process Python mirror of the Rego (`src/aegis/policy/engine.py`) | nothing |
+| `rego` | **The Rego itself**, in-process, through regopy (Microsoft's rego-cpp) | `regopy` (in `requirements.lock`) |
+| `opa` | **The Rego in an Open Policy Agent server** over its REST API | an OPA server (`AEGIS_OPA_URL`) |
+
+All three use the same governed policy: each decision carries the active, approved configuration (`input.policy_data`)
+and is recorded with that version id, so the Policy Governance lifecycle (draft, replay, approve, activate, rollback)
+works with every engine. With OPA, Aegis first checks that the server runs **exactly** the approved Rego (it compares
+OPA's loaded modules with the local ones) and refuses to use it otherwise. If an engine is down, slow, returns
+something unexpected, or runs different Rego, the call is **denied** (`PDP-001`) and the refusal is recorded; nothing is
+ever allowed by default. Switching engine on an existing database needs one newly approved policy version, because a
+version is bound to the evaluator that was approved (`rules_hash`).
+
+The Rego is hardened to fail closed: missing or wrong-typed fields deny, an unknown data ceiling counts as `public`, and
+a transfer amount that is not a number (for example the text `"25000"`) is refused (`ARG-001`) instead of compared.
+
+```powershell
+$env:AEGIS_POLICY_ENGINE = 'rego'; .venv\Scripts\python -m aegis_demo.serve --ephemeral      # the Rego, no binary
+# with an OPA binary (AEGIS_OPA_BINARY, `opa` on PATH, or Downloads\opa\opa_windows_amd64.exe):
+.venv\Scripts\python -m aegis_demo.opa_setup start          # OPA on http://127.0.0.1:8181 serving config/policies
+. .\.local\opa\aegis-opa-env.ps1; .venv\Scripts\python -m aegis_demo.serve --ephemeral
+.venv\Scripts\python -m aegis_demo.opa_setup test           # opa test config/policies (the generated Rego unit tests)
+```
+
+How it is kept honest: `tests/policy_cases.py` holds the shared cases. They run through the Python mirror, the Rego via
+regopy and a real OPA, which must agree exactly; they also generate `config/policies/tool_call_test.rego` for
+`opa test`. `tests/test_policy_differential.py` runs 4,800 generated inputs: well-formed ones must agree exactly and,
+on malformed or hostile ones, the Rego must never be more permissive than the Python mirror. CI
+(`.github/workflows/ci.yml`) installs OPA and runs `opa check`, `opa test` and the full suite.
+
 ## Architecture
 
 ```
@@ -198,7 +256,7 @@ scene-by-scene flow.
 | Concern | Local / tests | Azure deployment (planned) |
 |---|---|---|
 | Identity provider | Built-in dev IdP (no passwords — never expose); optional built-in OIDC demo provider (`--sso`) | People: any OIDC provider (Keycloak, Entra ID...) through `AEGIS_OIDC_*`. Agent identities: Keycloak (`AEGIS_AGENT_IDP=keycloak`, built and tested); Microsoft Entra Agent ID not built |
-| Policy engine | In-process Python engine implementing `config/policies/tool_call.rego` | OPA sidecar with the same Rego; `tests/test_policy.py` checks both agree when `opa` is installed |
+| Policy engine | `AEGIS_POLICY_ENGINE=python` (default), `rego` (the Rego itself, in-process) or `opa` (local OPA via `aegis_demo.opa_setup`) | OPA sidecar with the same Rego, checked against the approved Rego before every use |
 | Database | Persistent PostgreSQL for `serve`; SQLite only for tests/narration/explicit `--ephemeral` | Managed PostgreSQL, migration/backup/retention procedures still required |
 | Hot store | In-memory | Valkey (`ValkeyHotStore`, extra `valkey`) |
 | Signing keys | Persisted in protected `.local/keys` for the PostgreSQL console; ephemeral in unit tests | Azure Key Vault |
@@ -273,9 +331,10 @@ customer changes, executed-transfer list and Studio run log remain in memory. Be
 volatile, restart revokes old task Mandates and cancels pending approvals instead of restoring access with lost
 taint/rate-limit state. Start a fresh task after restarting. Resolving an alert does not automatically resume an agent.
 
-This workflow edits supported configuration only. **It does not run or publish arbitrary Rego through OPA.**
-Changing the Python evaluator source requires a newly reviewed policy version; older incompatible inputs are
-skipped during replay. OPA deployment/publishing, production authentication and cloud telemetry export remain separate work.
+This workflow edits supported configuration (thresholds, redaction entities, approval side effects), whichever policy
+engine runs. Rego *source* is not edited through the console: changing the Rego, the Python evaluator or the engine
+requires a newly reviewed policy version; older incompatible inputs are skipped during replay. Production
+authentication and cloud telemetry export remain separate work.
 
 ## Tests and evidence
 
@@ -292,10 +351,11 @@ narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.tx
 ## Responsible AI, security and limitations
 
 See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords (switch it off with `AEGIS_ENABLE_DEV_LOGIN=false`); SSO has been tested only against a fake provider and the built-in one, not a live Keycloak/Entra tenant; the Python policy engine
-must be kept in step with the Rego (conformance tests); Studio scenes remain scripted, while the optional
+mirrors the Rego (kept in step by exact and differential tests); a real OPA binary has not been run on the
+development laptop (no approved download route yet), so the real-OPA tests run only in CI; Studio scenes remain scripted, while the optional
 [Bank Assistant](docs/live-agents.md) uses real LangGraph/Azure planning and a Microsoft Agent Framework KYC workflow;
-governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; Microsoft Entra Agent ID
-provisioning, managed OPA publishing and Azure deployment are not built yet; Keycloak agent identities have been run
+governed editing changes supported configuration, not Rego source; Microsoft Entra Agent ID provisioning and
+Azure deployment are not built yet; Keycloak agent identities have been run
 only on a local single-node Keycloak (no clustering, TLS or secret manager). Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
 governance and evidence records now persist in PostgreSQL.

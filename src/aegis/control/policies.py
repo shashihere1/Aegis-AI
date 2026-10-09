@@ -1,6 +1,8 @@
 """Approved, immutable policy configurations and side-effect-free historical replay.
 
-The local Python PDP supports configuration changes, not arbitrary Rego execution.
+Works with every policy engine (python, rego, opa): each decision evaluates the active approved configuration and
+is stamped with its version id. Versions can change configuration, not Rego source; a Rego or evaluator change
+needs a newly approved version (see rules_hash).
 """
 
 import asyncio
@@ -20,7 +22,9 @@ from aegis.control.context import ControlContext, ctx, session
 from aegis.control.identity.idp import Persona
 from aegis.control.tables import DecisionRecord, PolicyState, PolicyVersion, utcnow
 from aegis.policy import engine as engine_module
-from aegis.policy.engine import PythonEngine, policy_version
+from aegis.policy import engines as engines_module
+from aegis.policy.engine import policy_version
+from aegis.policy.engines import PolicyUnavailable, evaluator, normalize, rego_available, rego_sources
 
 
 class PaymentThreshold(BaseModel):
@@ -67,9 +71,22 @@ class Replay(BaseModel):
     limit: int = Field(default=200, ge=1, le=1000)
 
 
-def rules_hash(policy_dir: str) -> str:
-    # Captures the code actually evaluated, not just the displayed Rego.
-    return sha256_hex(Path(engine_module.__file__).read_text("utf-8"))
+def rules_hash(policy_dir: str, engine: str = "python", sources: dict[str, str] | None = None) -> str:
+    """Fingerprint of the evaluator that turns a configuration into decisions; approved versions are bound to it.
+
+    python: the Python engine's source (unchanged, so existing approved versions stay valid).
+    rego / opa: the engine kind, the runtime Rego and the adapter code that feeds it. Editing the Rego, or switching
+    engine, therefore needs a newly approved version, exactly like editing the Python engine does.
+    """
+    if engine == "python":
+        return sha256_hex(Path(engine_module.__file__).read_text("utf-8"))
+    return sha256_hex(
+        {
+            "engine": engine,
+            "rego": sources if sources is not None else rego_sources(policy_dir),
+            "adapter": Path(engines_module.__file__).read_text("utf-8"),
+        }
+    )
 
 
 def version_dict(row: PolicyVersion) -> dict:
@@ -105,7 +122,7 @@ async def initialize(c: ControlContext) -> None:
                 name="Initial checked-in policy",
                 configuration=data,
                 content_hash=sha256_hex(data),
-                rules_hash=rules_hash(c.settings.policy_dir),
+                rules_hash=rules_hash(c.settings.policy_dir, c.settings.policy_engine),
                 author="bootstrap",
                 approver="bootstrap",
                 status="active",
@@ -118,25 +135,47 @@ async def initialize(c: ControlContext) -> None:
         await s.commit()
 
 
-class ManagedEngine:
-    """Read the committed active version for each decision; activation needs no restart."""
+def bound_evaluator(c: ControlContext, configuration: dict, version_id: str, sources: dict[str, str] | None = None):
+    """The configured engine, bound to one approved configuration and the version id it stamps on decisions."""
+    st = c.settings
+    return evaluator(
+        st.policy_engine,
+        st.policy_dir,
+        configuration,
+        version_id,
+        http=c.http,
+        opa_url=st.opa_url,
+        opa_timeout=st.opa_timeout_seconds,
+        opa_token=st.opa_token,
+        sources=sources,
+    )
 
-    def __init__(self, c: ControlContext, fallback):
-        self.c, self.fallback = c, fallback
-        self.version = fallback.version
+
+class ManagedEngine:
+    """Read the committed active version for each decision; activation needs no restart. Works with every engine."""
+
+    def __init__(self, c: ControlContext):
+        self.c = c  # engines reach OPA through c.http, the control plane's client
+        self.version = policy_version(c.settings.policy_dir)
 
     async def evaluate(self, policy_input: dict) -> dict:
-        if self.c.settings.policy_engine != "python":
-            return await self.fallback.evaluate(policy_input)
+        settings = self.c.settings
         async with self.c.db.sessionmaker() as s:
             state = await s.get(PolicyState, "tool-call")
             version = await s.get(PolicyVersion, state.active_version)
             if version.content_hash != sha256_hex(version.configuration):
                 raise RuntimeError("Active policy configuration hash does not verify")
-            if version.rules_hash != rules_hash(self.c.settings.policy_dir):
-                raise RuntimeError("Policy evaluator code changed; an approved matching policy version is required")
-            self.version = version.id
-            return PythonEngine(self.c.settings.policy_dir, version.configuration, version.id).decide(policy_input)
+            # One read of the Rego: the same text is hashed against the approval and handed to the engine, so the Rego
+            # that was checked is exactly the Rego that decides.
+            sources = rego_sources(settings.policy_dir) if settings.policy_engine != "python" else None
+            if version.rules_hash != rules_hash(settings.policy_dir, settings.policy_engine, sources):
+                raise RuntimeError(
+                    f"The active policy version was not approved for the current evaluator ({settings.policy_engine}, "
+                    "or its Rego or code changed); approve a policy version for it"
+                )
+            self.version = version.id  # for receipts that are not decisions (a2a, /health); decisions carry their own
+            verdict = await bound_evaluator(self.c, version.configuration, version.id, sources).evaluate(policy_input)
+            return normalize(verdict, version.id)
 
 
 def router() -> APIRouter:
@@ -154,8 +193,8 @@ def router() -> APIRouter:
         return row
 
     def editable(c: ControlContext):
-        if c.settings.policy_engine != "python":
-            raise HTTPException(409, "Configuration lifecycle currently supports the Python PDP only")
+        if c.settings.policy_engine == "rego" and not rego_available():
+            raise HTTPException(409, "policy_engine=rego needs the regopy package installed")
 
     @r.get("/versions")
     async def versions(s=Depends(session)):
@@ -174,7 +213,7 @@ def router() -> APIRouter:
             name=body.name,
             configuration=data,
             content_hash=sha256_hex(data),
-            rules_hash=rules_hash(c.settings.policy_dir),
+            rules_hash=rules_hash(c.settings.policy_dir, c.settings.policy_engine),
             author=user.username,
             status="draft",
             justification=body.justification,
@@ -198,9 +237,9 @@ def router() -> APIRouter:
         row = await load(s, version_id)
         if row.status not in {"draft", "submitted"}:
             raise HTTPException(409, "Replay is available only for a draft or submitted version")
-        if row.rules_hash != rules_hash(c.settings.policy_dir):
+        if row.rules_hash != rules_hash(c.settings.policy_dir, c.settings.policy_engine):
             raise HTTPException(409, "Evaluator code changed; create and replay a new draft")
-        candidate = PythonEngine(c.settings.policy_dir, row.configuration, row.id)
+        candidate = bound_evaluator(c, row.configuration, row.id)
         records = (await s.scalars(select(DecisionRecord).order_by(DecisionRecord.ts.desc()).limit(body.limit))).all()
         results, skipped, transitions = [], 0, Counter()
         for record in records:
@@ -212,8 +251,14 @@ def router() -> APIRouter:
             if old is None or old.rules_hash != row.rules_hash or old.content_hash != sha256_hex(old.configuration):
                 skipped += 1
                 continue
-            before = PythonEngine(c.settings.policy_dir, old.configuration, old.id).decide(snapshot)
-            after = candidate.decide(snapshot)
+            try:  # policy-only evaluation; an OPA query is read-only, nothing is executed
+                before = normalize(await bound_evaluator(c, old.configuration, old.id).evaluate(snapshot), old.id)
+                after = normalize(await candidate.evaluate(snapshot), row.id)
+            except PolicyUnavailable as exc:  # no evidence is better than evidence from a broken evaluator
+                raise HTTPException(503, f"The policy engine is unavailable, so no replay was stored: {exc}") from exc
+            except Exception:  # a recorded input the engine cannot evaluate is reported as skipped, not as a change
+                skipped += 1
+                continue
             changed_fields = [k for k in ("decision", "reasons", "obligations") if before[k] != after[k]]
             changed = bool(changed_fields)
             if changed:
@@ -283,7 +328,7 @@ def router() -> APIRouter:
         row = await load(s, version_id)
         if row.author == user.username:
             raise HTTPException(403, "Segregation of duties: authors cannot approve their own policy")
-        if row.status != "submitted" or row.rules_hash != rules_hash(c.settings.policy_dir):
+        if row.status != "submitted" or row.rules_hash != rules_hash(c.settings.policy_dir, c.settings.policy_engine):
             raise HTTPException(409, "Policy is not submitted or evaluator code has changed")
         row.status, row.approver, row.approved_at = "approved", user.username, utcnow()
         row.simulation = {
@@ -347,7 +392,7 @@ def router() -> APIRouter:
                 raise HTTPException(
                     409, "Only an approved version can be activated; rollback requires a previously active version"
                 )
-            if row.rules_hash != rules_hash(c.settings.policy_dir):
+            if row.rules_hash != rules_hash(c.settings.policy_dir, c.settings.policy_engine):
                 raise HTTPException(409, "Evaluator code does not match this version")
             previous = await load(s, state.active_version)
             previous.status, row.status = "superseded", "active"

@@ -29,8 +29,12 @@ class Settings(BaseModel):
     idp_key_path: str = ""
     identity_state_dir: str = ""  # local development identities; never a production secret store
 
-    policy_engine: str = "python"  # "python" (in-process) or "opa" (OPA sidecar REST API)
+    # python: in-process mirror of the Rego. rego: the Rego itself, in-process via regopy (no binary needed).
+    # opa: the Rego in an OPA server (AEGIS_OPA_URL); Aegis checks the server runs exactly the approved Rego.
+    policy_engine: Literal["python", "rego", "opa"] = "python"
     opa_url: str = "http://localhost:8181"
+    opa_timeout_seconds: float = Field(default=2.0, gt=0, le=30)  # whole request; a slow OPA fails closed
+    opa_token: str = Field(default="", repr=False)  # bearer token for an authenticating proxy in front of OPA
     policy_dir: str = str(REPO_ROOT / "config" / "policies")
 
     hotstore_url: str = ""  # "redis://..." for Valkey; empty -> in-memory (single process only)
@@ -52,6 +56,9 @@ class Settings(BaseModel):
     # Empty = provider roles are used as Aegis roles unchanged. Non-empty = only mapped roles are granted.
     oidc_role_map: str = ""
     oidc_scopes: str = "openid profile email"
+    # Separation of duties by identity: refuse any login that holds more than one Aegis role. A person who acts in
+    # several roles uses a separate account for each (see keycloak_setup `accounts`).
+    oidc_one_role_per_account: bool = False
     oidc_clock_skew: int = 60
     # Comma-separated callback URLs the console may use (built-in provider only; real providers hold their own).
     oidc_redirect_uris: str = (

@@ -41,7 +41,7 @@ export function PolicyGovernance({ policy }: { policy: Policies }) {
   const report = current?.simulation;
   const payments = (policy.data.thresholds as { payments?: { hitl_amount_eur?: number } })?.payments;
   const busy = act.isPending;
-  const writable = policy.engine === "python";
+  const writable = ["python", "rego", "opa"].includes(policy.engine);
   const action = (verb: string, extra: Record<string, unknown> = {}) => act.mutate({ path: `/v1/policies/${current?.id}/${verb}`, body: extra });
   return <Card title="Governed policy changes" className="mb-5">
     <div className="space-y-5 p-5">

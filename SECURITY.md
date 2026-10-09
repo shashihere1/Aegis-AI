@@ -40,8 +40,25 @@ The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for 
   30 seconds. Anyone the provider authenticates but who has no mapped role gets no operator access (roles come only from
   the token). Browser tokens live in `sessionStorage` (gone when the tab closes), so a script injected into the console
   could read them: keep the console's content-security policy strict when deploying.
+- **One identity per role** (`AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT=true`, set by the Keycloak env script): a sign-in whose
+  token maps to more than one Aegis role is refused, so conflicting duties (registering and approving an agent,
+  authoring and approving policy) cannot sit on one login. Aegis still checks separation of duties per action on top of
+  this. Limits: the rule counts roles, not people, so one human who is given two accounts can still use both; the
+  organisation must issue accounts per duty and review who holds which. It does not apply to the passwordless dev IdP.
 - **Local signing keys** persist in the protected `.local/keys` folder for the PostgreSQL console. Test keys are
   ephemeral. Neither approach is a production key store; use Azure Key Vault in a shared environment.
+  - *Explicit creation, strict startup.* Persistent keys are created once, out of band, with
+    `python -m aegis.keys init` (atomic `O_CREAT|O_EXCL` write at mode 0600; concurrent starts converge on one key).
+    Normal startup then only *loads* them: a configured key that is missing or malformed raises `SigningKeyError`
+    and stops the service, instead of silently minting a new identity that would invalidate every issued token and
+    break evidence verification. Empty paths keep the old ephemeral behaviour for tests and laptop demos.
+  - *Fingerprints, never private keys.* `python -m aegis.keys show` and the startup log print only the public-key
+    RFC 7638 fingerprint. Record it, restart, and confirm it is unchanged to verify persistence. Private PEMs are
+    never logged (even `repr(SigningKey)` shows only the kid and fingerprint).
+  - *Backup and recovery.* Back up `AEGIS_SIGNING_KEY_PATH` and `AEGIS_IDP_KEY_PATH` (default `.local/keys/*.pem`)
+    to an encrypted, access-controlled location; they are the signing identity. To recover, restore the files to the
+    same paths and run `python -m aegis.keys show`; the fingerprints must match the recorded values. The keys stay
+    out of Git (`.local/`, `*.pem`, `*.key` are ignored). Production uses Azure Key Vault instead of files.
 - **Internal API token** (`AEGIS_INTERNAL_TOKEN`) protects Gateway → control-plane calls locally; use
   workload identity (managed identity / mTLS) in Azure.
 - The demo returns an agent's private key once at approval, for the demo runtime. In production it is delivered
@@ -60,7 +77,23 @@ from the protected, Git-ignored `connection.json`. Do not expose the passwordles
 Policy configurations are immutable through the API. Replay precedes submission, a different person approves,
 and activation checks the expected current version. Configuration/evaluator hashes must match before use.
 An independent approver may reject a submitted proposal with a required justification; it cannot then activate.
-Supported configuration changes execute in the Python PDP; this is not an arbitrary-Rego publishing pipeline.
+Supported configuration changes apply to every policy engine (Python mirror, Rego via regopy, OPA); Rego source
+is not edited through the console.
+
+**Policy decision point, fail closed.** Any engine error, timeout (`AEGIS_OPA_TIMEOUT_SECONDS`, whole request),
+unexpected answer (unknown decision or obligation, a deny without a reason) or an OPA that runs different Rego than
+the approved policy becomes a recorded deny (`PDP-001`); there is no path where a PDP problem allows a call. OPA's
+loaded modules are compared with the local Rego at most every 30 seconds (`/v1/policies`); a server that is changed
+between checks can answer for up to that long, so restrict who can write to OPA (its policy API, or bundles
+signed and served from a trusted location in production). Put an authenticating proxy in front of OPA (Aegis sends `AEGIS_OPA_TOKEN` as a bearer token; OPA's own token
+authorization needs a system.authz policy, which the loaded-policy check refuses as an extra module) when it
+is reachable by anything but the gateway. The governed configuration is sent with every decision and always
+overwrites any `policy_data` a caller may have put into the input. The Rego is hardened to deny malformed input,
+and differential tests check it is never more permissive than the Python mirror. A governed configuration missing a
+field denies (`CFG-001`). Before any engine runs, the gateway refuses tool arguments that are too large or deep, or
+contain NaN/infinity (also as text) or numbers too precise to compare reliably (`ARG-002`, recorded). Rego is compared
+with OPA's loaded modules with line endings normalised, and `.gitattributes` keeps `.rego` files LF. regopy is native code: after any
+native error its interpreter is discarded and rebuilt.
 Replay evaluates recorded context only, without invoking tools, payment execution, counters or approvals.
 
 SOC assignments must name active analysts. Case transitions are validated; resolution/false-positive status
