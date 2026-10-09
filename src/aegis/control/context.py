@@ -12,6 +12,7 @@ from aegis.common.settings import REPO_ROOT, Settings
 from aegis.control.db import Database
 from aegis.control.identity.idp import DevIdp
 from aegis.control.identity.oidc import OidcVerifier
+from aegis.control.identity.people import PersonDirectory
 from aegis.control.identity.users import UserAuthenticator
 from aegis.hotstore import HotStore
 
@@ -27,10 +28,13 @@ class ControlContext:
     taxonomy: dict[str, list[str]]
     users: UserAuthenticator | None = None  # who is this bearer token? (dev personas and/or OIDC)
     oidc: OidcVerifier | None = None
+    people: PersonDirectory | None = None  # which accounts are one real person (separation of duties)
+    attestation_task: Any = None  # the re-attestation scheduler, while it runs
     agent_identity: Any = None  # AgentIdentityProvider: where each agent's own identity lives
     builtin_oidc: Any = None  # the demo-only OIDC provider, when enabled
     telemetry: Any = None
     gateway_service_public_pem: str = ""  # Gateway's public key, to authenticate its internal calls
+    evidence_key: SigningKey | None = None  # signs ledger checkpoints and evidence packs (never tokens)
     llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property

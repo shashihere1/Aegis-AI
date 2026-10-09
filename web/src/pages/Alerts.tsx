@@ -18,6 +18,7 @@ const DETECTIONS: Record<string, string> = {
   "DET-09": "First-time tool use relative to recorded history",
   "DET-12": "Orphaned agent (owner left)",
   "DET-13": "Adaptive risk reached the critical tier",
+  "DET-14": "Agent attestation overdue (owner has not re-confirmed)",
 };
 
 export function Alerts() {

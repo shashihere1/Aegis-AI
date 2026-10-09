@@ -323,6 +323,18 @@ export interface IdentityStatus {
   agents_with_identity: number;
 }
 
+export interface AttestationStatus {
+  interval_days: number;
+  grace_days: number;
+  auto_enforce: boolean;
+  scheduler_running: boolean;
+  active_agents: number;
+  due: number;
+  overdue: number;
+  orphaned: number;
+  next_due: string | null;
+}
+
 export interface ReconcileReport {
   provider: string;
   checked: number;

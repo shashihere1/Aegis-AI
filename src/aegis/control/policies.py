@@ -307,7 +307,7 @@ def router() -> APIRouter:
     ):
         editable(c)
         row = await load(s, version_id)
-        if row.author != user.username or row.status != "draft":
+        if row.status != "draft" or not await c.people.same_person(s, user, row.author):
             raise HTTPException(409, "Only the author can submit their draft")
         if not row.simulation or row.simulation.get("content_hash") != row.content_hash:
             raise HTTPException(409, "Run replay before submitting the policy")
@@ -326,7 +326,7 @@ def router() -> APIRouter:
     ):
         editable(c)
         row = await load(s, version_id)
-        if row.author == user.username:
+        if await c.people.same_person(s, user, row.author):
             raise HTTPException(403, "Segregation of duties: authors cannot approve their own policy")
         if row.status != "submitted" or row.rules_hash != rules_hash(c.settings.policy_dir, c.settings.policy_engine):
             raise HTTPException(409, "Policy is not submitted or evaluator code has changed")
@@ -354,7 +354,7 @@ def router() -> APIRouter:
     ):
         editable(c)
         row = await load(s, version_id)
-        if row.author == user.username:
+        if await c.people.same_person(s, user, row.author):
             raise HTTPException(403, "Segregation of duties: authors cannot review their own policy")
         if row.status != "submitted":
             raise HTTPException(409, "Only a submitted version can be rejected")
@@ -385,7 +385,7 @@ def router() -> APIRouter:
             if state.active_version != body.expected_active_version:
                 raise HTTPException(409, "Active policy changed; refresh and review before retrying")
             row = await load(s, version_id)
-            if row.author == user.username:
+            if await c.people.same_person(s, user, row.author):
                 raise HTTPException(403, "Policy authors cannot activate or roll back their own version")
             allowed = {"superseded"} if rollback else {"approved"}
             if row.status not in allowed or not row.approver:

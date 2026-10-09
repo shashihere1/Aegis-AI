@@ -1,5 +1,6 @@
 """Aegis control plane: registry, identity/STS, approvals, discovery, SOC and evidence (plan §7.3)."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ from aegis.control import (
     internal,
     investigations,
     model_controls,
+    ownership,
     policies,
     registry,
     risk,
@@ -34,6 +36,7 @@ from aegis.control.identity import idp as idp_module
 from aegis.control.identity import oidc_provider, sts
 from aegis.control.identity.agent_identity import AgentIdentityProvider, build_agent_identity
 from aegis.control.identity.oidc import IdentityUnavailable, OidcConfig, OidcVerifier
+from aegis.control.identity.people import PersonDirectory
 from aegis.control.identity.users import UserAuthenticator
 from aegis.hotstore import HotStore, make_hotstore
 
@@ -66,15 +69,18 @@ def create_app(
         hotstore=hotstore or make_hotstore(settings.hotstore_url),
         http=http,
         taxonomy=load_taxonomy(),
+        evidence_key=SigningKey.ensure(settings.evidence_key_file, "evidence-1"),
     )
     # Public-key fingerprints only (never the private key). Persistent keys keep the same fingerprint
     # across restarts; an ephemeral one changes every start, which is the signal it is dev-only.
     log.info(
-        "signing keys ready: sts fingerprint=%s (%s), idp fingerprint=%s (%s)",
+        "signing keys ready: sts fingerprint=%s (%s), idp fingerprint=%s (%s), evidence fingerprint=%s (%s)",
         context.sts_key.fingerprint,
         "persistent" if settings.signing_key_path else "ephemeral",
         context.idp.key.fingerprint,
         "persistent" if settings.idp_key_path else "ephemeral",
+        context.evidence_key.fingerprint,
+        "persistent" if settings.evidence_key_file else "ephemeral",
     )
     oidc_config = OidcConfig.from_settings(settings)
     own_http: httpx.AsyncClient | None = None
@@ -85,7 +91,8 @@ def create_app(
         # provider (Keycloak, Entra...) over the network, honouring the usual proxy environment variables.
         own_http = None if oidc_config.builtin else network_client(oidc_config.issuer)
         context.oidc = OidcVerifier(oidc_config, own_http or http)
-    context.users = UserAuthenticator(context.idp, settings, context.oidc)
+    context.people = PersonDirectory(settings.person_links, context.idp, context.db)
+    context.users = UserAuthenticator(context.idp, settings, context.oidc, context.people)
     use_keycloak = settings.agent_idp == "keycloak" and agent_identity is None
     agent_http = network_client(settings.keycloak_url) if use_keycloak else None
     context.agent_identity = agent_identity or build_agent_identity(settings, context.idp, agent_http)
@@ -104,6 +111,12 @@ def create_app(
         await policies.initialize(context)
         await sts.rehydrate_revocations(context)
         await context.telemetry.start()
+        # An in-memory SQLite database shares one connection, so a background transaction would interleave with
+        # request writes (same rule as telemetry); there, campaigns are run on demand through the API instead.
+        if (settings.attestation_interval_days > 0 or settings.attestation_auto_enforce) and ":memory:" not in (
+            settings.database_url
+        ):
+            context.attestation_task = asyncio.create_task(ownership.run_scheduler(context))
         if settings.agent_idp != "dev":
             try:  # a provider that is down at start-up must not stop the control plane; calls fail closed (503)
                 report = await identity_sync.reconcile(context)
@@ -113,6 +126,9 @@ def create_app(
         try:
             yield
         finally:
+            if context.attestation_task is not None:
+                context.attestation_task.cancel()
+                await asyncio.gather(context.attestation_task, return_exceptions=True)
             await context.telemetry.stop()
             await context.db.engine.dispose()
             for client in (own_http, agent_http):

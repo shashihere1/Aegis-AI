@@ -28,6 +28,10 @@ class Settings(BaseModel):
     # PEM file for the STS signing key. Empty -> an ephemeral key is generated at start-up (dev only).
     signing_key_path: str = ""
     idp_key_path: str = ""
+    # PEM file for the evidence key that signs ledger checkpoints and evidence packs. Empty -> evidence.pem next to
+    # the STS key when that one is persistent, otherwise ephemeral. Kept apart from the STS key so a signed
+    # checkpoint can never be presented as a token, and a token key can never sign evidence.
+    evidence_key_path: str = ""
     identity_state_dir: str = ""  # local development identities; never a production secret store
 
     # python: in-process mirror of the Rego. rego: the Rego itself, in-process via regopy (no binary needed).
@@ -60,6 +64,11 @@ class Settings(BaseModel):
     # Separation of duties by identity: refuse any login that holds more than one Aegis role. A person who acts in
     # several roles uses a separate account for each (see keycloak_setup `accounts`).
     oidc_one_role_per_account: bool = False
+    # Token claim (dotted path) naming the real person behind an account, e.g. "employee_id". Accounts that share it are
+    # one person for separation of duties. When set, a staff login without it is refused (it could not be linked).
+    oidc_person_claim: str = ""
+    # Trusted directory of account -> person, e.g. {"priya.raman.policy-author": "priya.raman"}. Wins over the claim.
+    person_links: dict[str, str] = Field(default_factory=dict)
     oidc_clock_skew: int = 60
     # Comma-separated callback URLs the console may use (built-in provider only; real providers hold their own).
     oidc_redirect_uris: str = (
@@ -86,6 +95,15 @@ class Settings(BaseModel):
     approval_ttl: int = 900
     approval_hold_seconds: float = 0.0  # how long the gateway holds a call waiting for approval
     auto_suspend_on_critical: bool = True
+
+    # --- Ownership re-attestation (plan §8.2) ---
+    # Every active agent's owner must re-confirm it this often. 0 turns the schedule off (campaigns stay manual).
+    attestation_interval_days: int = Field(default=90, ge=0, le=3650)
+    # How long an owner has to confirm once an agent is due, and the window a new owner gets after a hand-over.
+    attestation_grace_days: int = Field(default=14, ge=1, le=365)
+    # Suspend an agent automatically once it is overdue. Off: an alert is raised and a person decides.
+    attestation_auto_enforce: bool = False
+    attestation_check_seconds: int = Field(default=3600, ge=1, le=86400)  # how often the scheduler looks
 
     # One-process demo shares this random capability. Separate services must configure a protected shared value.
     investigation_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
@@ -132,6 +150,13 @@ class Settings(BaseModel):
     # Trusted resource ownership directory. The local bank supplies synthetic fixture ownership.
     resource_owners: dict[str, dict[str, str]] = Field(default_factory=dict)
 
+    @property
+    def evidence_key_file(self) -> str:
+        """Where the evidence key lives: the configured path, else beside a persistent STS key, else ephemeral."""
+        if self.evidence_key_path or not self.signing_key_path:
+            return self.evidence_key_path
+        return str(Path(self.signing_key_path).with_name("evidence.pem"))
+
     @classmethod
     def from_env(cls) -> Settings:
         """Precedence: defaults < connection.json < .env < .env.local < process environment.
@@ -156,5 +181,5 @@ class Settings(BaseModel):
                 if value is None and name in AZURE_ENV_ALIASES:
                     value = source.get(AZURE_ENV_ALIASES[name])
                 if value is not None:
-                    values[name] = json.loads(value) if name == "resource_owners" else value
+                    values[name] = json.loads(value) if name in {"resource_owners", "person_links"} else value
         return cls(**values)
