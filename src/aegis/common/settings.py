@@ -104,6 +104,15 @@ class Settings(BaseModel):
     approval_hold_seconds: float = 0.0  # how long the gateway holds a call waiting for approval
     auto_suspend_on_critical: bool = True
 
+    # Outbound alert connector. HTTP is permitted only for the loopback mock receiver.
+    siem_enabled: bool = False
+    siem_url: str = "http://127.0.0.1:8011/events"
+    siem_token: str = Field(default="", repr=False)
+    siem_token_path: str = ""  # protected file; never exposed in the console
+    siem_poll_seconds: float = Field(default=0.5, ge=0.1, le=60)
+    siem_timeout_seconds: float = Field(default=3, ge=0.1, le=30)
+    siem_max_attempts: int = Field(default=8, ge=1, le=50)
+
     # --- Ownership re-attestation (plan §8.2) ---
     # Every active agent's owner must re-confirm it this often. 0 turns the schedule off (campaigns stay manual).
     attestation_interval_days: int = Field(default=90, ge=0, le=3650)
@@ -179,6 +188,11 @@ class Settings(BaseModel):
         local = REPO_ROOT / ".local" / "connection.json"
         if local.exists():
             values.update(json.loads(local.read_text(encoding="utf-8-sig")))
+        siem_local = REPO_ROOT / ".local" / "siem" / "connection.json"
+        if siem_local.is_file():
+            configured = json.loads(siem_local.read_text(encoding="utf-8-sig"))
+            # This provisioning artifact cannot override unrelated governance/Azure configuration.
+            values.update({k: v for k, v in configured.items() if k in {"siem_enabled", "siem_url", "siem_token_path"}})
         sources = []
         for filename in (".env", ".env.local"):
             env_file = REPO_ROOT / filename

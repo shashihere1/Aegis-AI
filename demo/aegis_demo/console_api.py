@@ -16,6 +16,7 @@ from aegis.sdk import AegisDenied, LlmCallError
 from aegis_demo.agent_api import router as agent_router
 from aegis_demo.copilot import router as copilot_router
 from aegis_demo.data import DOCUMENTS
+from aegis_demo.walkthrough import router as walkthrough_router
 
 JAN = "jan.devries"
 
@@ -29,6 +30,7 @@ def console_app(get_world: Callable, *, include_sandbox: bool = True) -> FastAPI
     app = FastAPI(title="Aegis live console")
     app.include_router(agent_router(get_world))
     app.include_router(copilot_router(get_world))
+    app.include_router(walkthrough_router(get_world))
     llm_lock = asyncio.Lock()
 
     def llm_configuration() -> dict:

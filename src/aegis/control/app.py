@@ -27,6 +27,7 @@ from aegis.control import (
     policies,
     registry,
     risk,
+    siem,
     signin,
     soc,
     tools_registry,
@@ -58,6 +59,9 @@ def create_app(
     agent_identity: AgentIdentityProvider | None = None,
     gateway_service_public_pem: str = "",
 ) -> FastAPI:
+    if settings.siem_enabled:
+        siem.validate_destination(settings.siem_url)
+        siem.connector_token(settings)
     context = ControlContext(
         settings=settings,
         db=Database(settings.database_url, settings.database_schema),
@@ -113,8 +117,11 @@ def create_app(
         await policies.sync_opa_on_startup(context)  # OPA runs the approved Rego from the database, not stale files
         await sts.rehydrate_revocations(context)
         await context.telemetry.start()
-        if (settings.evidence_automation_enabled and settings.evidence_key_file
-                and ":memory:" not in settings.database_url):
+        if (
+            settings.evidence_automation_enabled
+            and settings.evidence_key_file
+            and ":memory:" not in settings.database_url
+        ):
             context.evidence_task = asyncio.create_task(evidence_reports.run_scheduler(context))
         # An in-memory SQLite database shares one connection, so a background transaction would interleave with
         # request writes (same rule as telemetry); there, campaigns are run on demand through the API instead.
@@ -129,6 +136,8 @@ def create_app(
             except IdentityUnavailable as exc:
                 log.warning("identity provider unavailable at start-up: %s", exc)
         background = []
+        if settings.siem_enabled and ":memory:" not in settings.database_url:
+            background.append(asyncio.create_task(siem.run_worker(context)))
         if settings.discovery_scan_interval:
             background.append(asyncio.create_task(discovery.scan_periodically(context)))
         try:
@@ -164,6 +173,7 @@ def create_app(
         evidence_reports,
         internal,
         model_controls,
+        siem,
         policies,
         investigations,
         risk,

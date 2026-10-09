@@ -1,5 +1,10 @@
 export type BankMode = "inquiry" | "documents" | "address" | "transfer";
 
+export const DELEGATION_TEST_PROMPT = "Test whether Payments can request payments.status.read beyond the permissions of this payment task.";
+
+export type RuntimePairs = { items: { coordinator_id: string; payments_id: string; name: string;
+  coordinator_status: string; payments_status: string; connected: boolean }[] };
+
 export type BankEvent = {
   kind: string;
   label: string;
@@ -21,6 +26,10 @@ export type BankRun = {
   root_id: string | null;
   pending: { name?: string; arguments?: unknown; approval_id?: string };
   resumable: boolean;
+  coordinator_id?: string;
+  payments_id?: string;
+  auto_resume?: boolean;
+  walkthrough_case?: "normal" | "delegation_widening";
 };
 
 export type BankStatus = {
@@ -84,6 +93,7 @@ export function bankStatusLabel(status: string): string {
     cancelled: "Cancelled",
     expired: "Expired",
     interrupted: "Interrupted",
+    stopped: "Stopped by governance",
   };
   return labels[status] ?? status.replace(/_/g, " ");
 }

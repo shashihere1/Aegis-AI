@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { Ban, TriangleAlert } from "lucide-react";
 import { useAlerts } from "../lib/queries";
 import { Investigation } from "../components/Investigation";
+import { SiemForwarding } from "../components/SiemForwarding";
 import { clock, timeAgo, titleCase } from "../lib/format";
 import type { Alert } from "../lib/types";
 import { Card, Drawer, EmptyState, JsonBlock, Loading, PageHeader, Select, SeverityPill, StatusPill, Td, Th } from "../components/ui";
@@ -19,6 +20,9 @@ const DETECTIONS: Record<string, string> = {
   "DET-12": "Orphaned agent (owner left)",
   "DET-13": "Adaptive risk reached the critical tier",
   "DET-14": "Agent attestation overdue (owner has not re-confirmed)",
+  "DET-15": "Delegation permission widening blocked",
+  "DET-16": "Estimated daily model budget reached 80%",
+  "DET-17": "Model request denied before Azure because of budget",
 };
 
 export function Alerts() {
@@ -31,6 +35,7 @@ export function Alerts() {
   return (
     <>
       <PageHeader icon={TriangleAlert} title="Alert Management" subtitle="Detections raised by the SOC engine, with the response the playbook already took" />
+      <SiemForwarding />
       <Card className="mb-4 flex flex-wrap gap-3 p-4">
         <Select label="Severity" value={severity} onChange={setSeverity} options={[{ value: "", label: "All severities" }, ...["critical", "high", "medium", "low"].map((v) => ({ value: v, label: titleCase(v) }))]} />
         <Select label="Status" value={status} onChange={setStatus} options={[{ value: "", label: "All statuses" }, ...["new", "triage", "investigating", "resolved", "false_positive"].map((v) => ({ value: v, label: titleCase(v) }))]} />

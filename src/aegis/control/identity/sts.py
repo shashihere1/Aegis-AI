@@ -18,7 +18,8 @@ from datetime import UTC, datetime, timedelta
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from opentelemetry import trace
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common import crypto
@@ -139,6 +140,19 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
                 raise StsError("temporarily_unavailable", "the identity provider is unavailable") from exc
 
     if parent is not None:
+        # Correlation is derived only from authenticated identities and a signed parent,
+        # never from caller-supplied agent/user/root IDs. No bearer token enters the audit log.
+        if parent.jti != parent_claims.get("jti") or parent.subject != parent_claims.get("sub"):
+            raise StsError("invalid_grant", "parent mandate does not match its stored identity")
+        form["verified_delegation"] = {
+            "mandate_id": parent.id,
+            "root_id": parent.root_id,
+            "agent_id": parent.agent_id,
+            "subject": parent.subject,
+            "target_agent_id": agent.id,
+            "requested_categories": asked_categories,
+            "parent_categories": parent.intent_categories,
+        }
         if parent.status != "active" or parent.expires_at.replace(tzinfo=UTC) <= now:
             raise StsError("invalid_grant", "parent mandate is no longer active", "REV-001")
         revoked = await c.hotstore.revoked(
@@ -295,13 +309,23 @@ async def descendants(s: AsyncSession, mandate_ids: list[str]) -> list[Mandate]:
 async def revoke_tree(
     c: ControlContext, s: AsyncSession, mandate_ids: list[str], reason: str, actor: str, status: str = "revoked"
 ) -> list[str]:
+    await ledger.lock_transaction(s)
     revoked = []
     for m in await descendants(s, mandate_ids):
         if m.status == "active":
-            m.status, m.revoked_reason = status, reason
-            revoked.append(m.id)
-        await c.hotstore.revoke("mdt", m.id, reason)
-        await c.hotstore.revoke("jti", m.jti, reason)
+            # A stale ORM read must never overwrite a concurrent suspension with "completed".
+            result = await s.execute(
+                update(Mandate)
+                .where(Mandate.id == m.id, Mandate.status == "active")
+                .values(status=status, revoked_reason=reason)
+            )
+            if result.rowcount:
+                revoked.append(m.id)
+            else:
+                await s.refresh(m)
+        actual_reason = m.revoked_reason or reason
+        await c.hotstore.revoke("mdt", m.id, actual_reason)
+        await c.hotstore.revoke("jti", m.jti, actual_reason)
     if revoked:
         await ledger.append(
             s, f"mandate.{status}", actor, ",".join(revoked[:20]), {"count": len(revoked), "reason": reason}
@@ -331,6 +355,12 @@ async def blast_radius(s: AsyncSession, agent_id: str) -> dict:
 
 async def suspend_agent(c: ControlContext, s: AsyncSession, agent_id: str, reason: str, actor: str) -> dict:
     """Kill switch (plan F6): suspend, cascade-revoke, disable the IdP identity, cancel approvals."""
+    await ledger.lock_transaction(s)
+    async with c.execution_lock:
+        return await _suspend_agent(c, s, agent_id, reason, actor)
+
+
+async def _suspend_agent(c: ControlContext, s: AsyncSession, agent_id: str, reason: str, actor: str) -> dict:
     agent = await s.get(Agent, agent_id)
     radius = await blast_radius(s, agent_id)
     await c.hotstore.revoke("agent", agent_id, reason)
@@ -417,19 +447,35 @@ def router() -> APIRouter:
             return await exchange(c, s, form)
         except StsError as exc:
             await s.rollback()
-            s.add(
-                DecisionRecord(
-                    id=new_id("dec"),
-                    action="sts.token_exchange",
-                    decision="deny",
-                    reasons=[{"rule": exc.rule or exc.error, "message": exc.description}],
-                    input_snapshot={"authorization_details": authorization_details},
-                )
+            verified = form.get("verified_delegation", {})
+            span = trace.get_current_span().get_span_context()
+            record = DecisionRecord(
+                id=new_id("dec"),
+                action="sts.token_exchange",
+                decision="deny",
+                reasons=[{"rule": exc.rule or exc.error, "message": exc.description}],
+                mandate_id=verified.get("mandate_id"),
+                root_id=verified.get("root_id"),
+                agent_id=verified.get("agent_id"),
+                subject=verified.get("subject"),
+                trace_id=format(span.trace_id, "032x") if span.is_valid else None,
+                input_snapshot={"delegation": verified} if verified else {},
             )
-            await ledger.append(s, "mandate.denied", "sts", exc.rule or exc.error, {"reason": exc.description})
+            s.add(record)
+            await ledger.append(
+                s,
+                "mandate.denied",
+                "sts",
+                exc.rule or exc.error,
+                {"reason": exc.description, "decision_id": record.id, **verified},
+            )
+            # Import locally: SOC response playbooks themselves call the token service.
+            from aegis.control.soc import on_decision
+
+            await on_decision(c, s, record)
             await s.commit()
             return JSONResponse(
-                {"error": exc.error, "error_description": exc.description, "rule": exc.rule},
+                {"error": exc.error, "error_description": exc.description, "rule": exc.rule, "decision_id": record.id},
                 status_code=503 if exc.error == "temporarily_unavailable" else 400,
             )
 

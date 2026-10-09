@@ -207,8 +207,9 @@ async def verify_with_framework(task: Task, customer_id: str, document_id: str) 
 
 
 class LiveAva:
-    def __init__(self, world, task: Task, mode: str, emit):
+    def __init__(self, world, task: Task, mode: str, emit, *, agent_ids=None):
         self.world, self.task, self.mode, self.emit = world, task, mode, emit
+        self.agent_ids = dict(world.agent_ids if agent_ids is None else agent_ids)
         self.available: dict[str, Operation] = {}
 
     async def prepare(self):
@@ -221,7 +222,7 @@ class LiveAva:
                 continue
             if op.delegated:
                 specialist = "kyc-agent" if op.server == "kyc" else "payments-agent"
-                allowed = f"a2a:{self.world.agent_ids[specialist]}" in self.task.scopes
+                allowed = f"a2a:{self.agent_ids.get(specialist)}" in self.task.scopes
             else:
                 allowed = op.tool in visible.get(op.server, set())
             if allowed:
@@ -415,7 +416,7 @@ class LiveAva:
                 raise AegisDenied("KYC verification is required before address update.")
             if name == "verify_document":
                 response = await self.task.delegate(
-                    self.world.agent_ids["kyc-agent"],
+                    self.agent_ids["kyc-agent"],
                     "Verify this owned passport",
                     {**args, "customer_id": "C-1001", "runtime": "microsoft-agent-framework"},
                 )
@@ -431,7 +432,7 @@ class LiveAva:
                     else {**args, "customer_id": "C-1001"}
                 )
                 response = await self.task.delegate(
-                    self.world.agent_ids["payments-agent"], "Initiate the customer-confirmed transfer", metadata
+                    self.agent_ids["payments-agent"], "Initiate the customer-confirmed transfer", metadata
                 )
                 receipt = specialist_data(response)
                 result = receipt["data"]

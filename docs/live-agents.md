@@ -12,7 +12,157 @@ settlement and document checks are not genuine KYC. See the README's persistent 
 There is no OPA implementation change in this feature. Existing MCP policy enforcement still runs through
 the selected gateway engine. The new model controls are explicitly Python-enforced, not Rego execution.
 
+## Connected two-agent security walkthrough
+
+Open `/ui/walkthrough` (Security Walkthrough in either sidebar). This controlled security test uses
+the real registry, token service, gateway, MCP banking tools and audit records. It is not the retired
+scripted Studio and never fabricates a denial, alert, approval or execution receipt.
+
+1. As **Priya**, enter a unique pair-name prefix and click **Register and submit two agents**.
+   A is a new LangGraph/Azure coordinator instance; B is a separate SDK/MCP Payments specialist.
+   Both are DEV/on-prem runtimes owned by Niels. Permissions, delegation relationships and the local
+   endpoint are configured before review. Existing Ava/KYC/Payments are not replaced.
+2. As **Sanne**, review A and B through the registry links, enter an independent reason and click
+   **Approve reviewed pair**. Normal registry separation-of-duties checks apply.
+3. As **Priya** or owner **Niels**, click **Connect approved runtime templates**. Both must be active.
+   The local development IdP supplies protected keys server-side, never to browser/run-history storage.
+   This managed local connection is not enterprise IAM or arbitrary agent-code deployment.
+4. As **Jan**, select that pair, check synthetic/paid-inference consent and run an account inquiry.
+   The actual Azure-selected tool receipt and user-to-agent-to-tool lineage appear live.
+5. Check consent again and click **Attempt forbidden permission widening**. A fresh valid payment
+   Mandate authorizes the configured A-to-B pair. B's real token exchange additionally asks for
+   `payments.status.read`, registered for B but excluded from this parent task. Expect **DLG-004**,
+   a linked **DET-15** alert, a red dashed attempted delegation, no child Mandate and no banking call.
+   This bounded challenge makes no Azure request.
+6. Prepare a transfer above the displayed threshold to the specified new beneficiary. Review the
+   exact proposal and click **Confirm this synthetic action** as Jan. Execution pauses at **Risk
+   approval required**; customer confirmation alone must not change balance/payment records.
+7. As **Sanne**, open the ordinary **Approvals** inbox and approve the matching approval ID with a
+   justification. The same customer-confirmed action resumes automatically once. Expect one verified
+   receipt and one committed payment. Rejection/expiry prevents continuation instead.
+8. Prepare and customer-confirm a second transfer, leaving it awaiting risk approval. As **Mark**,
+   review the blast radius, enter a reason, explicitly confirm suspension and click **Suspend A and
+   revoke delegated work**. Expect **Stopped by governance**, descendant Mandates revoked and pending
+   approval cancelled, with no second payment. B's identity stays active; its affected session dies.
+9. Select each recorded run and open **complete audit and traces** as Mark/Eva. Root task, agent IDs,
+   originating Jan identity, reasons and trace IDs correlate. Resume A only through its normal registry
+   controls; old revoked tasks never revive.
+
+Each case has a fresh task: an inquiry's permissions are never silently expanded into a payment.
+Runtime connections and pending credentials stay in memory. After restart, reconnect approved pairs
+and start fresh tasks; historical pending work remains interrupted/non-resumable. No uncertain writes
+are automatically retried. The local bank orders suspension against transactional commits: uncommitted
+work can be stopped, but committed payments are not undone. This does not claim process termination or
+rollback of already-forwarded external banking/model requests.
+
+Offline coverage (fixture model responses; no paid Azure or live database calls):
+
+```powershell
+.\.venv\Scripts\python -m pytest tests/test_security_walkthrough.py tests/test_scenarios.py tests/test_lineage.py tests/test_agent_runtime.py -q
+```
+
 ## Configuration and launch
+
+### Bank Assistant with your registered pair
+
+Register, independently approve and connect A/B once in Security Walkthrough, as above. Then open
+`/ui/assistant` as Jan and choose your pair under **Executing agent pair**. Normal requests now use
+that exact coordinator and specialist, not the default Ava identities. These templates support
+inquiry/transfer only; choose default Ava for KYC/address tasks. The runtime/budget header is for the
+selected coordinator. Recorded runs label their actual coordinator and expose live lineage and linked
+alerts. Staff can open **this coordinator / staff kill switch** directly from the selected run.
+
+For the negative case, explicitly tick **Enable bounded permission-widening security test**, use:
+
+```text
+Test whether Payments can request payments.status.read beyond the permissions of this payment task.
+```
+
+Tick test consent and click **Run permission-widening test**. This selected mode invokes the existing
+real token-exchange challenge; it does not ask Azure to interpret the prompt or invent an attack.
+Normal requests never silently enable it. Expect DLG-004, DET-15, no child credentials and no bank call.
+Disable test mode for a normal balance/transfer prompt. Pair transfers resume automatically after
+customer confirmation and separate approval; default Ava retains its explicit resume button.
+
+### Independent mock SIEM and real alert forwarding
+
+From the repository root, after local PostgreSQL setup has protected `.local`, provision once:
+
+```powershell
+.\.venv\Scripts\python -m aegis_demo.siem --init
+```
+
+This creates a stable ingestion credential and connector settings in Git-ignored `.local/siem`.
+It never prints the credential, overwrites an existing one, or restarts a running service. Windows
+protection relies on the inherited `.local` ACLs from `local-postgres.ps1`; POSIX uses private modes.
+Dotenv/process settings override this connector configuration. Set `AEGIS_SIEM_ENABLED=false` to disable.
+
+Terminal 1 (separate receiver):
+
+```powershell
+.\.venv\Scripts\python -m aegis_demo.siem
+```
+
+Terminal 2 (restart Aegis only after finishing/cancelling pending work):
+
+```powershell
+.\.venv\Scripts\python -m aegis_demo.serve
+```
+
+Open `http://127.0.0.1:8011/` beside Bank Assistant. Trigger the permission-widening test again.
+The receiver should show the same alert ID/rule as Aegis. As Mark, **Alert Management** shows
+pending/sending/delivered/failed, attempt counts and measured alert-to-acknowledgement milliseconds.
+Healthy delivery targets the plan's <5s window; inspect the measured value rather than assume it.
+
+Alerts and outbox entries commit together in PostgreSQL (`siem_deliveries`). A separate worker sends
+real authenticated HTTP requests, then records delivery only when the receiver acknowledges the event
+ID and payload hash. Bounded retry/backoff, crash-recoverable leases and receiver ID deduplication avoid
+silent loss and duplicate displayed alerts. A stopped receiver does not stop policy enforcement.
+After retry exhaustion Mark can click **Retry delivery**; no banking action is retried. Only new alerts
+raised while forwarding is enabled are queued; old history is not automatically exported.
+
+The receiver independently stores minimized envelopes in `.local/siem/received.sqlite3` (not the banking
+database). Prompts, raw evidence/tool arguments, bank details and credentials are not exported. Alert
+titles use trusted detection labels. The local read-only viewer is unauthenticated and loopback-only;
+never expose it publicly. This is an OCSF-inspired JSON demo receiver, not certified OCSF, Sentinel or
+Splunk. A real SIEM needs its own destination/authentication/acknowledgement adapter.
+
+### Enforced budget policy and a no-spend denial test
+
+The Python model-policy engine already reserved an estimated daily allowance **before** Azure calls.
+The completed presentation now includes per-agent holds/headroom/blocked requests in **Usage & Cost**,
+one DET-16 warning at 80% per agent/day/policy version, and a correlated DET-17 alert on budget denial.
+An over-limit next request returns `LLM-BUDGET` and never reaches Azure. This blocks further model calls,
+not the agent's registration, and does not undo prior actions. OPA/tool policies were not changed.
+
+To demonstrate blocking without burning credit, finish pending tasks and stop Aegis. In its terminal:
+
+```powershell
+$env:AEGIS_LLM_DAILY_BUDGET_EUR = '0.000001'
+.\.venv\Scripts\python -m aegis_demo.serve
+```
+
+As Jan, select a connected pair, **disable security-test mode**, choose Account inquiry and ask
+`What is my account balance?`, with Azure consent. Expect **Blocked / LLM-BUDGET**, zero model calls,
+no banking receipt, an actual deny decision and DET-17 in both Aegis and the enabled mock SIEM.
+This is real enforcement under an explicitly lowered demo limit, not fabricated spending.
+
+Afterwards stop Aegis and restore the process setting (or remove it to use your existing dotenv limit):
+
+```powershell
+Remove-Item Env:AEGIS_LLM_DAILY_BUDGET_EUR
+.\.venv\Scripts\python -m aegis_demo.serve
+```
+
+Reconnect approved pairs after either restart. Existing usage and uncertain holds are preserved.
+The cost policy is configured estimation, not an Azure billing guarantee. Holds can block a request
+before recorded usage reaches 100%, because the next call must fit in the remaining allowance.
+
+Offline regression command (fixture Azure only; separate temporary receiver/database):
+
+```powershell
+.\.venv\Scripts\python -m pytest tests/test_siem.py tests/test_security_walkthrough.py tests/test_model_controls.py -q
+```
 
 Your successful package checks establish that the frameworks are installed, not that a workflow ran.
 For a new environment, use the approved package source:

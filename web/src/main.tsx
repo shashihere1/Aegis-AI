@@ -26,6 +26,7 @@ import { SignIn } from "./pages/SignIn";
 import { AuthCallback } from "./pages/AuthCallback";
 import { BankAssistant } from "./pages/BankAssistant";
 import { Copilot } from "./pages/Copilot";
+import { SecurityWalkthrough } from "./pages/SecurityWalkthrough";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 1000 } },
@@ -62,6 +63,7 @@ const router = createBrowserRouter(
         { path: "policies", element: <PoliciesPage /> },
         { path: "evidence", element: <Evidence /> },
         { path: "assistant", element: <BankAssistant /> },
+        { path: "walkthrough", element: <SecurityWalkthrough /> },
         { path: "studio", element: <Navigate to="/assistant" replace /> },
         { path: "copilot", element: <Copilot /> },
         { path: "*", element: <Navigate to="/agents" replace /> },

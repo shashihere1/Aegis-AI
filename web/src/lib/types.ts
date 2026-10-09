@@ -134,7 +134,7 @@ export interface LineageNode {
 export interface LineageEdge {
   from: string;
   to: string;
-  kind: "initiated" | "delegated_to" | "invoked" | "read" | "approval" | "resulted_in";
+  kind: "initiated" | "delegated_to" | "attempted_delegation" | "invoked" | "read" | "approval" | "resulted_in";
   count: number;
   decisions: Partial<Record<DecisionKind, number>>;
   decision?: DecisionKind;

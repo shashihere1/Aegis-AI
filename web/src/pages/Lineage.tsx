@@ -119,6 +119,7 @@ function edgeColor(e: LineageEdge, aggregate: boolean): string {
 }
 
 function edgeLabel(e: LineageEdge, aggregate: boolean): string | undefined {
+  if (e.kind === "attempted_delegation") return `Attempt denied · ${e.rules?.join(", ") ?? ""}`;
   if (!aggregate || e.kind === "resulted_in" || e.count < 2) return undefined;
   return e.decisions.deny ? `${e.count}× · ${e.decisions.deny} denied` : `${e.count}×`;
 }
@@ -136,12 +137,12 @@ function layout(graph: Lineage, aggregate: boolean): { nodes: Node[]; edges: Edg
   for (const n of graph.nodes) if (n.kind === "result") col[n.id] = last + 1;
 
   const rows: Record<number, number> = {};
-  const verdicts = Object.fromEntries(graph.edges.filter((e) => e.kind === "invoked").map((e) => [e.to, e]));
+  const verdicts = Object.fromEntries(graph.edges.filter((e) => ["invoked", "attempted_delegation"].includes(e.kind)).map((e) => [e.to, e]));
   const nodes: Node[] = graph.nodes.map((n) => {
     const c = col[n.id] ?? 0;
     const r = (rows[c] = (rows[c] ?? -1) + 1);
     const v = verdicts[n.id];
-    const blocked = n.kind === "tool" && (aggregate ? !!n.outcomes && Object.keys(n.outcomes).every((o) => o === "denied") : n.outcome === "denied");
+    const blocked = n.status === "attempted_only" || (n.kind === "tool" && (aggregate ? !!n.outcomes && Object.keys(n.outcomes).every((o) => o === "denied") : n.outcome === "denied"));
     return {
       id: n.id,
       type: "aegis",
@@ -177,6 +178,16 @@ interface CallFilter {
   agentId: string;
   agentLabel: string;
   action: string;
+}
+
+export function LiveLineageGraph({ graph }: { graph: Lineage }) {
+  const flow = useMemo(() => layout(graph, false), [graph]);
+  return <div className="h-[360px]" aria-label="Live lineage from recorded decisions">
+    <ReactFlow nodes={flow.nodes} edges={flow.edges} nodeTypes={nodeTypes} fitView
+      fitViewOptions={{ padding: 0.15, maxZoom: 1.1 }} proOptions={{ hideAttribution: true }}>
+      <Background /><Controls />
+    </ReactFlow>
+  </div>;
 }
 
 export function LineagePage() {

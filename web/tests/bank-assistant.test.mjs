@@ -76,6 +76,7 @@ test("waiting and stopped states have readable, non-success labels", () => {
   assert.equal(bankStatusLabel("not_executed"), "No action prepared");
   assert.equal(bankStatusLabel("uncertain"), "Execution uncertain");
   assert.equal(bankStatusLabel("interrupted"), "Interrupted");
+  assert.equal(bankStatusLabel("stopped"), "Stopped by governance");
   assert.equal(bankStatusLabel("future_state"), "future state");
 });
 

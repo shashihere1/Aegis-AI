@@ -88,6 +88,7 @@ function useNav(): { section: string; items: NavItem[] }[] {
       items: [
         { to: "/evidence", label: "Audit Ledger", icon: ShieldCheck },
         { to: "/assistant", label: "Bank Assistant", icon: MessageSquare },
+        { to: "/walkthrough", label: "Security Walkthrough", icon: GitFork },
       ],
     },
   ];
@@ -108,6 +109,9 @@ function CustomerSidebar() {
       <div className="mb-2 px-3 pt-2 text-[11px] font-semibold tracking-wider text-faint uppercase">Your workspace</div>
       <NavLink to="/assistant" className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent-soft px-3 py-3 text-sm font-medium text-accent">
         <MessageSquare className="size-[18px]" />Bank Assistant
+      </NavLink>
+      <NavLink to="/walkthrough" className="mt-2 flex items-center gap-3 rounded-xl border border-line px-3 py-3 text-sm font-medium text-muted hover:text-accent">
+        <GitFork className="size-[18px]" />Security Walkthrough
       </NavLink>
     </nav>
     <div className="m-3 rounded-xl border border-line bg-inset p-4">
@@ -367,6 +371,7 @@ const TITLES: Record<string, string> = {
   policies: "Policy Governance",
   evidence: "Audit Ledger",
   assistant: "Bank Assistant",
+  walkthrough: "Security Walkthrough",
 };
 
 function useTheme(): [string, () => void] {
@@ -397,7 +402,7 @@ export function Layout() {
   const [theme, toggleTheme] = useTheme();
   const section = location.pathname.split("/")[1] || "agents";
   useEffect(() => {
-    if (customer && section !== "assistant") navigate("/assistant", { replace: true });
+    if (customer && !["assistant", "walkthrough"].includes(section)) navigate("/assistant", { replace: true });
   }, [customer, section, navigate]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
