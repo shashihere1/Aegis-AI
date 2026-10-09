@@ -5,11 +5,13 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from aegis.control import bank_tables  # noqa: F401 -- register additive sandbox/archive tables
 from aegis.control.tables import Base
 
 
 class Database:
     def __init__(self, url: str, schema: str = ""):
+        self.schema = schema
         kwargs = {}
         if schema:
             if not url.startswith("postgresql") or not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", schema):
@@ -46,6 +48,49 @@ class Database:
                     text("""
                     CREATE TRIGGER aegis_case_immutable BEFORE UPDATE OR DELETE ON case_events
                     FOR EACH ROW EXECUTE FUNCTION aegis_ledger_immutable()
+                """)
+                )
+                await conn.execute(text("DROP TRIGGER IF EXISTS aegis_checkpoint_immutable ON ledger_checkpoints"))
+                await conn.execute(
+                    text("""
+                    CREATE TRIGGER aegis_checkpoint_immutable BEFORE UPDATE OR DELETE ON ledger_checkpoints
+                    FOR EACH ROW EXECUTE FUNCTION aegis_ledger_immutable()
+                """)
+                )
+                await conn.execute(
+                    text("""
+                    CREATE OR REPLACE FUNCTION aegis_report_immutable() RETURNS trigger AS $$
+                    BEGIN
+                      IF TG_OP = 'DELETE' THEN
+                        RAISE EXCEPTION 'Aegis evidence reports are immutable';
+                      END IF;
+                      IF NEW.id IS DISTINCT FROM OLD.id OR NEW.job_key IS DISTINCT FROM OLD.job_key
+                        OR NEW.schedule_id IS DISTINCT FROM OLD.schedule_id
+                        OR NEW.generated_by IS DISTINCT FROM OLD.generated_by
+                        OR NEW.generated_at IS DISTINCT FROM OLD.generated_at
+                        OR NEW.status IS DISTINCT FROM OLD.status
+                        OR NEW.scope::jsonb IS DISTINCT FROM OLD.scope::jsonb
+                        OR NEW.summary::jsonb IS DISTINCT FROM OLD.summary::jsonb
+                        OR NEW.sha256 IS DISTINCT FROM OLD.sha256
+                        OR NEW.key_fingerprint IS DISTINCT FROM OLD.key_fingerprint
+                        OR NEW.artifact IS DISTINCT FROM OLD.artifact
+                        OR NEW.error_code IS DISTINCT FROM OLD.error_code
+                      THEN RAISE EXCEPTION 'Aegis evidence report content is immutable'; END IF;
+                      IF OLD.reviewed_at IS NOT NULL AND (
+                        NEW.reviewed_at IS DISTINCT FROM OLD.reviewed_at
+                        OR NEW.reviewed_by IS DISTINCT FROM OLD.reviewed_by
+                        OR NEW.review_note IS DISTINCT FROM OLD.review_note
+                      ) THEN RAISE EXCEPTION 'Aegis evidence report review is immutable'; END IF;
+                      RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql
+                """)
+                )
+                await conn.execute(text("DROP TRIGGER IF EXISTS aegis_report_immutable ON evidence_reports"))
+                await conn.execute(
+                    text("""
+                    CREATE TRIGGER aegis_report_immutable BEFORE UPDATE OR DELETE ON evidence_reports
+                    FOR EACH ROW EXECUTE FUNCTION aegis_report_immutable()
                 """)
                 )
 

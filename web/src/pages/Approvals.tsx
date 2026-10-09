@@ -112,7 +112,7 @@ export function Approvals() {
         ) : !pending.data?.length ? (
           <Card>
             <EmptyState icon={BadgeCheck} title="Nothing waiting for approval">
-              Run scene S3 (€25,000 transfer) from Demo Studio.
+              Confirm a high-value or new-beneficiary transfer in Bank Assistant to request independent approval.
             </EmptyState>
           </Card>
         ) : (

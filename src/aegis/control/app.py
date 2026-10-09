@@ -18,6 +18,7 @@ from aegis.control import (
     approvals,
     discovery,
     evidence,
+    evidence_reports,
     identity_sync,
     internal,
     investigations,
@@ -112,6 +113,9 @@ def create_app(
         await policies.sync_opa_on_startup(context)  # OPA runs the approved Rego from the database, not stale files
         await sts.rehydrate_revocations(context)
         await context.telemetry.start()
+        if (settings.evidence_automation_enabled and settings.evidence_key_file
+                and ":memory:" not in settings.database_url):
+            context.evidence_task = asyncio.create_task(evidence_reports.run_scheduler(context))
         # An in-memory SQLite database shares one connection, so a background transaction would interleave with
         # request writes (same rule as telemetry); there, campaigns are run on demand through the API instead.
         if (settings.attestation_interval_days > 0 or settings.attestation_auto_enforce) and ":memory:" not in (
@@ -127,6 +131,9 @@ def create_app(
         try:
             yield
         finally:
+            if context.evidence_task is not None:
+                context.evidence_task.cancel()
+                await asyncio.gather(context.evidence_task, return_exceptions=True)
             if context.attestation_task is not None:
                 context.attestation_task.cancel()
                 await asyncio.gather(context.attestation_task, return_exceptions=True)
@@ -147,6 +154,7 @@ def create_app(
         discovery,
         soc,
         evidence,
+        evidence_reports,
         internal,
         model_controls,
         policies,

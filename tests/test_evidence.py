@@ -20,7 +20,8 @@ async def test_auditor_can_download_verifiable_pack(world):
     preview = await world.api("eva.visser", "GET", "/v1/evidence/summary")
     assert preview.status_code == 200
     assert preview.json()["integrity"]["ok"] is True
-    assert preview.json()["counts"]["agents"] == len(catalog.AGENTS)  # every demo agent, whatever the catalog holds
+    assert preview.json()["counts"]["agents"] == len(world.agent_ids)
+    assert len(world.agent_ids) == len(catalog.AGENTS)  # every functional demo agent is registered
 
     response = await world.api("eva.visser", "GET", "/v1/evidence/pack")
     assert response.status_code == 200
@@ -114,4 +115,4 @@ async def test_pack_includes_full_seeded_inventory(world):
     assert verify_pack(response.content)["ok"]
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["counts"]["agents"] == len(catalog.AGENTS) + 1244
+    assert manifest["counts"]["agents"] == 1244 + len(world.agent_ids)

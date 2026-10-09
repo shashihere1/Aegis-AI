@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -12,6 +12,37 @@ def utcnow() -> datetime:
 
 class Base(DeclarativeBase):
     pass
+
+
+class EvidenceSchedule(Base):
+    __tablename__ = "evidence_schedules"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    created_by: Mapped[str] = mapped_column(String(120))
+    scope: Mapped[dict] = mapped_column(JSON)
+    interval_hours: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EvidenceReport(Base):
+    __tablename__ = "evidence_reports"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    job_key: Mapped[str] = mapped_column(String(160), unique=True)
+    schedule_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    generated_by: Mapped[str] = mapped_column(String(120))
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    scope: Mapped[dict] = mapped_column(JSON)
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    key_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    artifact: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class LlmReservation(Base):

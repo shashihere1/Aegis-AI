@@ -11,7 +11,7 @@ from starlette.routing import Mount
 from aegis.control.identity.agent_identity import KeycloakAgentIdentity
 from aegis.sdk import AegisAgent, AegisDenied
 from aegis_demo import data, mcp_servers
-from aegis_demo.world import BASE, FAKE_LLM_URL, running_world
+from aegis_demo.testing import BASE, FAKE_LLM_URL, running_world
 
 SECRET = "control-plane-secret"
 JAN = "jan.devries"

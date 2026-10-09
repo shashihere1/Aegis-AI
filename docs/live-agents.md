@@ -1,10 +1,13 @@
 # Live banking assistant: real frameworks, synthetic banking
 
-The new **Bank Assistant** screen at `/ui/assistant` is separate from the scripted Demo Studio.
+The **Bank Assistant** screen at `/ui/assistant` is the normal customer experience. Scripted Demo Studio
+and fake model routes are no longer mounted in the normal app.
 Ava executes a real LangGraph state graph: Azure chooses a function, validated code dispatches it through
 Aegis, and the tool result returns to the graph. KYC executes a two-executor Microsoft Agent Framework
 workflow (verification then receipt). KYC does not use an LLM; its verification data is synthetic.
-Payments remains the existing Python A2A specialist. Banking tools and accounts are still synthetic.
+Payments is a deterministic Python A2A specialist. Its MCP backend transactionally updates PostgreSQL-backed
+synthetic balances and payment records. Accounts and document records are synthetic; payments are not real
+settlement and document checks are not genuine KYC. See the README's persistent sandbox/migration section.
 
 There is no OPA implementation change in this feature. Existing MCP policy enforcement still runs through
 the selected gateway engine. The new model controls are explicitly Python-enforced, not Rego execution.
@@ -72,21 +75,34 @@ It does not call Azure or prove connectivity. All live submissions require synth
    is labelled `microsoft-agent-framework`, because that workflow actually executed.
 3. **Address change:** select Address change and use the example. KYC must succeed first. Review the exact
    proposed address, then confirm. The write ends with the tool's receipt rather than an invented model answer.
-4. **Transfer:** ask to transfer EUR 25,000 to the demo landlord as a new beneficiary. Confirm the exact amount,
-   IBAN and reference. Under the normal EUR 10,000 policy this additionally waits for risk approval. Switch to
+4. **Transfer:** select **Make a transfer**, then ask to transfer EUR 25,000 to the demo landlord as a new beneficiary.
+   In the right-hand **Live workflow & receipts** panel, review the exact amount, IBAN and reference in
+   **Review before execution**, then click **Confirm this synthetic action**. The Azure consent checkbox is not
+   payment confirmation. Under the default EUR 10,000 policy this additionally waits for risk approval. Switch to
    **Sanne Bakker**, approve that matching request in Approvals, return to **Jan** and click Resume. An expired,
    rejected, revoked or consumed approval cannot execute the payment. Approval thresholds follow your active
    existing tool policy; altered policy versions can change this outcome.
 5. As staff, inspect **Activity**, **Usage & Cost**, **Agent Lineage**, **Access Control** and the audit ledger.
    The assistant's model and tool events are recorded separately. View the exact run's root ID to inspect lineage.
 
-Azure output is non-deterministic: it can ask for clarification or fail argument validation. That is not
+Transfer and address tasks require structured function selection (`tool_choice="required"`); the write functions
+prepare a proposal without executing it. An explicit `explain_without_action` control function lets the model exit
+without a write for missing details, informational questions, declined requests or unavailable operations.
+A text-only response on these paths is **No action prepared**, never a completed change or a confirmation button.
+There is no automatic paid re-planning retry, and no application-generated payment from model prose.
+Historic completed action runs without a change receipt display a warning; they are not reopened or replayed.
+Committed sandbox operations return a PII-safe verification hash binding the exact normalized arguments, tool and
+task root. The assistant verifies this instead of comparing redacted IBAN/address strings with their original values.
+This hash is local transaction evidence, not an external signature. A mismatched write receipt is **Execution uncertain**;
+inspect the stored account and Activity before another write.
+
+Azure output is non-deterministic: it can ask for missing details or fail argument validation. That is not
 replaced with a fake success. At most six bounded model calls are allowed per task; parallel tool dispatch,
 arbitrary functions, arbitrary model URLs, customer-ID selection, and a second write in one task are refused.
 The customer selects a purpose before submission, narrowing the root Mandate and available operations.
 The directory binds Jan's signed identity to `C-1001` and its documents. A gateway call selecting another
-customer is denied even if a model invents an ID. The directory is a synthetic fixture, not an enterprise
-account-ownership integration. Untrusted documents still pass through Aegis's injection/taint checks.
+customer is denied even if a model invents an ID. The gateway directory is synthetic, not enterprise ownership integration. The banking repository also
+checks the signed initiating subject against the stored customer owner, independently of model-supplied IDs. Untrusted documents still pass through Aegis's injection/taint checks.
 
 ## Persistence and budget behavior
 
@@ -94,6 +110,8 @@ In the configured PostgreSQL database `aegis`, inspect:
 
 | Table | Stores |
 | --- | --- |
+| `bank_customers`, `bank_accounts`, `bank_documents` | Persistent synthetic profiles, balances and documents; starter records are never reset. |
+| `bank_operations`, `bank_payments`, `bank_entries` | Idempotency results, payment receipts and balanced debit/credit records. |
 | `agent_runs` | Run status, proposals, verified results and display history; no model API key or bearer token. |
 | `llm_reservations` | Budget holds, returned-token cost estimates, deployment, UTC day and model-policy snapshot/version. |
 | `usage` | Actual returned token counts and measured latency with estimated cost. |
@@ -112,8 +130,9 @@ discounts and provider billing can differ. Failed/uncertain requests retain the 
 authentication failure; holds are not automatically forgiven. A successful response replaces the hold with
 its returned-token estimate. The budget resets by UTC request-start day, not by deleting history.
 
-The bank's balances/address changes and transfer list are still in memory. Run history, budgets and governance
-records persist. Active framework state and Mandate tokens stay only in memory. Restart revokes local tasks,
+Bank balances, address changes, payment records, verification results and idempotency receipts persist alongside
+run history, budgets and governance records. Active framework state and Mandate tokens stay only in memory.
+Restart revokes local tasks,
 cancels pending approvals and marks their run histories interrupted; pending writes are never auto-replayed.
 Paid calls have no automatic retry, and duplicate run request IDs return the original history. The local
 runtime supports one open run per customer and one console process, not multi-worker resumable orchestration.
@@ -123,11 +142,11 @@ runtime supports one open run per customer and one console process, not multi-wo
 Real bank services, enterprise account directories, Keycloak/Entra authentication, production credentials
 and authorization, verified cloud/network residency controls, full OPA publishing/activation, and durable
 multi-worker workflow recovery remain separate work. Never use real customer data or expose the development
-persona login publicly. This increment has syntax/lint/frontend-build checks; it has not been live-tested
-against Azure or the running PostgreSQL console as part of implementation.
-Both framework graphs were also constructed successfully without executing any workflow or tool.
-Optional offline regression cases were added in `tests/test_agent_runtime.py` and `tests/test_model_controls.py`;
-the test suite was not run for this increment.
+persona login publicly. Sandbox checks execute real MCP, LangGraph and Microsoft Agent Framework through
+the UI's HTTP routes, using explicit offline model responses (not paid Azure). Transactional banking tests
+also run against isolated local PostgreSQL schemas. These checks do not restart the user's console or claim
+live Azure acceptance of the updated workflow. See `tests/test_bank_sandbox.py`, `tests/test_agent_runtime.py`
+and `tests/test_model_controls.py`.
 
 API references: [LangGraph graph API](https://docs.langchain.com/oss/python/langgraph/graph-api),
 [Microsoft Agent Framework executors](https://learn.microsoft.com/en-us/agent-framework/concepts/workflows/executors),

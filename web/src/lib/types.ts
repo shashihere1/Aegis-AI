@@ -238,6 +238,47 @@ export interface EvidenceSummary {
   source: string;
   integrity: LedgerVerify;
   counts: Record<"agents" | "mandates" | "decisions" | "approvals" | "alerts" | "ledger", number>;
+  period: { from: string; to: string; start: string; end_exclusive: string; timezone: string };
+  scope: { agent_id: string | null; root_id: string | null; framework: string; context: string; proof_mode: string };
+  evidence_key: { fingerprint: string; mode: string };
+  automation: { enabled: boolean; persistent_key: boolean; check_seconds: number };
+  coverage: EvidenceControl[];
+  executive_summary: string;
+}
+
+export interface EvidenceControl {
+  id: string;
+  title: string;
+  status: string;
+  observed_records: number;
+  limitations: string;
+  references: { framework: string; name: string; reference: string; source_url: string }[];
+  sources: { file: string; count: number; query: string; filters: { event_type_prefixes?: string[] }; record_ids: (string | number)[] }[];
+}
+
+export interface EvidenceReport {
+  id: string;
+  schedule_id: string | null;
+  generated_by: string;
+  generated_at: string;
+  status: "ready" | "failed";
+  sha256: string;
+  key_fingerprint: string;
+  error_code: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  summary: Partial<EvidenceSummary>;
+}
+
+export interface EvidenceSchedule {
+  id: string;
+  name: string;
+  created_by: string;
+  scope: { agent_id?: string | null; root_id?: string | null; framework: string };
+  interval_hours: number;
+  enabled: boolean;
+  next_run_at: string;
 }
 
 export interface Usage {
@@ -304,32 +345,6 @@ export interface GuardScan {
   pii: { entity: string; text: string }[];
   pii_count: number;
   redacted: string;
-}
-
-export interface StudioStep {
-  label: string;
-  status: "ok" | "denied" | "waiting" | "alert";
-  detail: string;
-  at: string;
-}
-
-export interface StudioRun {
-  id: string;
-  key: string;
-  title: string;
-  scene: string;
-  status: "running" | "waiting" | "completed" | "contained" | "blocked";
-  started_at: string;
-  steps: StudioStep[];
-  links: { root_id?: string; approval_id?: string; alert_ids?: string[] };
-}
-
-export interface StudioStatus {
-  agents: Record<string, { id: string; status: string }>;
-  kyc_variant: string;
-  kyc_tool_status: Record<string, string>;
-  emails_sent: number;
-  transfers: { payment_id: string; amount: number; creditor_iban: string }[];
 }
 
 export interface IdentityStatus {

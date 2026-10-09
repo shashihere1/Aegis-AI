@@ -32,6 +32,9 @@ class Settings(BaseModel):
     # the STS key when that one is persistent, otherwise ephemeral. Kept apart from the STS key so a signed
     # checkpoint can never be presented as a token, and a token key can never sign evidence.
     evidence_key_path: str = ""
+    evidence_automation_enabled: bool = True
+    evidence_check_seconds: int = Field(default=60, ge=1, le=3600)
+    evidence_checkpoint_seconds: int = Field(default=3600, ge=60, le=86400)
     identity_state_dir: str = ""  # local development identities; never a production secret store
 
     # python: in-process mirror of the Rego. rego: the Rego itself, in-process via regopy (no binary needed).
@@ -110,6 +113,8 @@ class Settings(BaseModel):
 
     # One-process demo shares this random capability. Separate services must configure a protected shared value.
     investigation_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
+    bank_sandbox_enabled: bool = False
+    bank_sandbox_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
 
     # Gateway → control-plane service identity (asymmetric; no shared secret).
     # The Gateway signs each internal call with its private ES256 key; the control plane verifies with
