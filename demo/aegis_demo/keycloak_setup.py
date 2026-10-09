@@ -87,6 +87,18 @@ def role_identities() -> list[dict]:
     return identities
 
 
+def person_links() -> dict[str, str]:
+    """Role account -> the person it belongs to (that person's first account), for AEGIS_PERSON_LINKS. Separation of
+    duties then treats `priya.raman` and `priya.raman.policy-author` as one person."""
+    links = {}
+    for username, _name, roles, _entitlements in PERSONAS:
+        if roles == ["customer"]:
+            continue
+        for index, role in enumerate(roles):
+            links[username if index == 0 else f"{username}.{role}"] = username
+    return links
+
+
 def user_representation(identity: dict, password: str) -> dict:
     return {
         "username": identity["username"],
@@ -426,6 +438,7 @@ def write_env() -> Path:
         "$env:AEGIS_OIDC_ROLES_CLAIM = 'realm_access.roles'",
         f"$env:AEGIS_OIDC_ROLE_MAP = '{json.dumps(role_map())}'",
         "$env:AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT = 'true'   # refuse a login that holds more than one Aegis role",
+        f"$env:AEGIS_PERSON_LINKS = '{json.dumps(person_links())}'   # one person's role accounts count as one person",
         "$env:AEGIS_ENABLE_DEV_LOGIN = 'true'   # set to 'false' to leave Keycloak as the only way in",
     ]
     agents = [

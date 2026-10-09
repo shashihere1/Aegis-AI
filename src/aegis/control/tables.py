@@ -87,6 +87,15 @@ class Agent(Base):
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PersonLink(Base):
+    """Which real person a sign-in name belongs to, recorded at sign-in so separation of duties can compare people."""
+
+    __tablename__ = "person_links"
+    username: Mapped[str] = mapped_column(String(255), primary_key=True)  # case-folded
+    person_id: Mapped[str] = mapped_column(String(255), index=True)  # case-folded
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class McpServer(Base):
     __tablename__ = "mcp_servers"
     id: Mapped[str] = mapped_column(String(60), primary_key=True)
@@ -224,6 +233,19 @@ class LedgerEntry(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     prev_hash: Mapped[str] = mapped_column(String(64))
     entry_hash: Mapped[str] = mapped_column(String(64))
+
+
+class LedgerCheckpoint(Base):
+    """A signed statement "the ledger had `entries` entries ending in `tip`", kept so a later rewrite is provable."""
+
+    __tablename__ = "ledger_checkpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entries: Mapped[int] = mapped_column(Integer)
+    tip: Mapped[str] = mapped_column(String(64))
+    ts: Mapped[str] = mapped_column(String(40))
+    signed_by: Mapped[str] = mapped_column(String(120))
+    key_fingerprint: Mapped[str] = mapped_column(String(64))
+    jws: Mapped[str] = mapped_column(Text)
 
 
 class PolicyVersion(Base):

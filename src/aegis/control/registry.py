@@ -3,19 +3,20 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common.ids import agent_id as new_agent_id
 from aegis.common.ids import new_id
 from aegis.common.models import LIFECYCLE, MATERIAL_FIELDS, AgentCreate, AgentPatch, AgentStatus
-from aegis.control import ledger
+from aegis.control import ledger, ownership
 from aegis.control.auth import OPERATORS, current_user, require_roles
 from aegis.control.context import ControlContext, session
 from aegis.control.identity import sts
 from aegis.control.identity.agent_identity import IdentityNotFound
 from aegis.control.identity.idp import Persona
+from aegis.control.ownership import Reassign, require_management_rights
 from aegis.control.tables import Agent, Alert, Tool
 
 # Each factor is normalized to 0-100, then weighted, so the weights are a legible statement of what
@@ -89,7 +90,7 @@ class Reason(BaseModel):
 
 
 class CampaignRequest(BaseModel):
-    due_in_days: int = 14
+    due_in_days: int = Field(default=14, ge=1, le=365)
 
 
 class LeaverEvent(BaseModel):
@@ -171,6 +172,8 @@ def router() -> APIRouter:
     async def update(agent_id: str, body: AgentPatch, request: Request, s: AsyncSession = Depends(session),
                      user: Persona = Depends(require_roles("agent-developer", "agent-owner", "admin"))):
         agent = await load(s, agent_id)
+        await require_management_rights(request.app.state.ctx, s, user, agent, "modify it",
+                                        any_agent_roles=("admin",), registrant_may=True)
         changes = body.model_dump(exclude_none=True)
         for key, value in changes.items():
             setattr(agent, key, value)
@@ -188,9 +191,11 @@ def router() -> APIRouter:
         return to_dict(agent)
 
     @r.post("/agents/{agent_id}/submit")
-    async def submit(agent_id: str, s: AsyncSession = Depends(session),
+    async def submit(agent_id: str, request: Request, s: AsyncSession = Depends(session),
                      user: Persona = Depends(require_roles("agent-developer", "agent-owner", "admin"))):
         agent = await load(s, agent_id)
+        await require_management_rights(request.app.state.ctx, s, user, agent, "submit it",
+                                        any_agent_roles=("admin",), registrant_may=True)
         await transition(s, agent, AgentStatus.PENDING_APPROVAL, f"user:{user.username}")
         await s.commit()
         return to_dict(agent)
@@ -199,9 +204,9 @@ def router() -> APIRouter:
     async def approve(agent_id: str, body: Reason, request: Request, s: AsyncSession = Depends(session),
                       user: Persona = Depends(require_roles("risk-approver"))):
         agent = await load(s, agent_id)
-        if user.username in (agent.registered_by, agent.owner):
-            raise HTTPException(403, "SOD-001: the registrant or owner cannot approve their own agent")
         c: ControlContext = request.app.state.ctx
+        if await c.people.same_person(s, user, agent.registered_by) or await c.people.same_person(s, user, agent.owner):
+            raise HTTPException(403, "SOD-001: the registrant or owner cannot approve their own agent")
         await transition(s, agent, AgentStatus.ACTIVE, f"user:{user.username}", body.reason)
         credentials = None
         event = "identity.provisioned"
@@ -238,6 +243,9 @@ def router() -> APIRouter:
     async def suspend(agent_id: str, body: Reason, request: Request, s: AsyncSession = Depends(session),
                       user: Persona = Depends(require_roles("soc-analyst", "risk-approver", "agent-owner"))):
         agent = await load(s, agent_id)
+        # Incident response (SOC) and risk governance must be able to stop any agent; an owner can stop only their own.
+        await require_management_rights(request.app.state.ctx, s, user, agent, "suspend it",
+                                        any_agent_roles=("soc-analyst", "risk-approver"))
         if AgentStatus.SUSPENDED not in LIFECYCLE[AgentStatus(agent.status)]:
             raise HTTPException(409, f"cannot suspend an agent in state {agent.status}")
         radius = await sts.suspend_agent(request.app.state.ctx, s, agent_id, body.reason or "manual suspension",
@@ -265,6 +273,7 @@ def router() -> APIRouter:
     async def retire(agent_id: str, body: Reason, request: Request, s: AsyncSession = Depends(session),
                      user: Persona = Depends(require_roles("agent-owner", "admin"))):
         agent = await load(s, agent_id)
+        await require_management_rights(request.app.state.ctx, s, user, agent, "retire it", any_agent_roles=("admin",))
         if agent.status == AgentStatus.ACTIVE:
             await sts.suspend_agent(request.app.state.ctx, s, agent_id, "retired", f"user:{user.username}")
         await transition(s, agent, AgentStatus.RETIRED, f"user:{user.username}", body.reason)
@@ -279,16 +288,38 @@ def router() -> APIRouter:
         due = datetime.now(UTC) + timedelta(days=body.due_in_days)
         agents = (await s.execute(select(Agent).where(Agent.status == AgentStatus.ACTIVE))).scalars().all()
         for agent in agents:
-            agent.attestation_due = due
+            # A new campaign must never give an agent that is already due more time.
+            if agent.attestation_due is None or ownership.aware(agent.attestation_due) > due:
+                agent.attestation_due = due
         await ledger.append(s, "attestation.campaign", f"user:{user.username}", "all-active",
                             {"agents": len(agents), "due": due.isoformat()})
         await s.commit()
         return {"agents": len(agents), "due": due}
 
-    @r.post("/agents/{agent_id}/attest")
-    async def attest(agent_id: str, s: AsyncSession = Depends(session), user: Persona = Depends(current_user)):
+    @r.get("/attestations/status", dependencies=[Depends(require_roles(*OPERATORS))])
+    async def attestation_status(request: Request, s: AsyncSession = Depends(session)):
+        """The schedule in force and where every active agent stands against it."""
+        return await ownership.status(request.app.state.ctx, s)
+
+    @r.post("/attestations/run")
+    async def run_schedule(request: Request, user: Persona = Depends(require_roles("risk-approver", "admin"))):
+        """Run one scheduler pass now (open due campaigns, alert on overdue agents, suspend if auto-enforce is on)."""
+        return await ownership.scheduled_cycle(request.app.state.ctx, actor=f"user:{user.username}")
+
+    @r.post("/agents/{agent_id}/owner")
+    async def reassign_owner(agent_id: str, body: Reassign, request: Request, s: AsyncSession = Depends(session),
+                             user: Persona = Depends(require_roles("agent-owner", "risk-approver", "admin"))):
+        """Hand an agent to a new owner (for example when the owner left). The new owner must then re-attest."""
         agent = await load(s, agent_id)
-        if user.username != agent.owner:
+        await ownership.reassign_owner(request.app.state.ctx, s, user, agent, body.new_owner, body.reason)
+        await s.commit()
+        return to_dict(agent)
+
+    @r.post("/agents/{agent_id}/attest")
+    async def attest(agent_id: str, request: Request, s: AsyncSession = Depends(session),
+                     user: Persona = Depends(current_user)):
+        agent = await load(s, agent_id)
+        if not await request.app.state.ctx.people.same_person(s, user, agent.owner):
             raise HTTPException(403, "only the agent's owner can attest")
         agent.attestation_due, agent.orphaned = None, False
         await ledger.append(s, "attestation.confirmed", f"user:{user.username}", agent.id, {})
@@ -298,13 +329,7 @@ def router() -> APIRouter:
     @r.post("/attestations/enforce")
     async def enforce(request: Request, s: AsyncSession = Depends(session),
                       user: Persona = Depends(require_roles("risk-approver", "admin"))):
-        now = datetime.now(UTC)
-        overdue = [a for a in (await s.execute(select(Agent).where(Agent.status == AgentStatus.ACTIVE,
-                                                                     Agent.attestation_due.is_not(None)))).scalars()
-                   if a.attestation_due.replace(tzinfo=UTC) <= now]
-        for agent in overdue:
-            await sts.suspend_agent(request.app.state.ctx, s, agent.id, "attestation overdue",
-                                    f"user:{user.username}")
+        overdue = await ownership.enforce_overdue(request.app.state.ctx, s, f"user:{user.username}")
         await s.commit()
         return {"suspended": [a.id for a in overdue]}
 
@@ -315,10 +340,14 @@ def router() -> APIRouter:
         c: ControlContext = request.app.state.ctx
         if body.username in c.idp.personas:
             c.idp.mark_leaver(body.username)
-        agents = (await s.execute(select(Agent).where(Agent.owner == body.username,
-                                                      Agent.status == AgentStatus.ACTIVE))).scalars().all()
+        # A suspended agent is orphaned too: it must not be resumed with an owner who is no longer there.
+        owned = Agent.owner == body.username
+        agents = (await s.execute(select(Agent).where(
+            owned, Agent.status.in_([AgentStatus.ACTIVE, AgentStatus.SUSPENDED])))).scalars().all()
         for agent in agents:
-            agent.orphaned, agent.attestation_due = True, datetime.now(UTC)
+            agent.orphaned = True
+            if agent.status == AgentStatus.ACTIVE:
+                agent.attestation_due = datetime.now(UTC)
             s.add(Alert(id=new_id("alr"), rule_id="DET-12", severity="medium", agent_id=agent.id,
                         title=f"Agent {agent.name} is orphaned: owner {body.username} left",
                         evidence={"owner": body.username, "sponsor": agent.sponsor}))

@@ -34,7 +34,7 @@ class DemoServer:
                 k: v
                 for k, v in from_env.items()
                 if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_"))
-                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine"}
+                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine", "person_links"}
             }
             overrides = sign_in if self.ephemeral else from_env
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):

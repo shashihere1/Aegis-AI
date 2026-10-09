@@ -17,7 +17,8 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Capability (PS-1) | Status | Where |
 |---|---|---|
 | Agent registry, lifecycle (register → approve → suspend → retire), risk tiering, signed passport | ✅ | `src/aegis/control/registry.py` |
-| Segregation of duties (registrant/owner cannot approve; approver ≠ initiator/owner) | ✅ | `registry.py`, `approvals.py` |
+| Segregation of duties (registrant/owner cannot approve; approver ≠ initiator/owner), checked per *person* across all of their accounts | ✅ | `registry.py`, `approvals.py`, `identity/people.py` |
+| Agent ownership (only an agent's owner can suspend/modify/retire it; SOC and risk approvers keep the kill switch) | ✅ | `registry.py` |
 | IdP integration seam + dev IdP; agents authenticate with `private_key_jwt` (no shared secrets) | ✅ | `src/aegis/control/identity/idp.py` |
 | **Every agent's own identity in Keycloak**: a per-agent client registered with the agent's public key only, signed-JWT sign-in, short-lived tokens checked on every Mandate request, kill switch that disables the identity, drift repair, shadow-identity discovery | ✅ (tested against a real Keycloak 26.2.5 and a fake; Entra Agent ID not built) | `agent_identity.py`, `identity_sync.py` |
 | JIT, task-scoped, purpose-bound Mandates; agent ∩ user ∩ purpose ("intersection rule") | ✅ | `src/aegis/control/identity/sts.py` |
@@ -30,7 +31,7 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | PII redaction (BSN 11-proof, IBAN, e-mail, phone) as a policy obligation | ✅ | `src/aegis/guard/pii.py` |
 | SOC detections, auto-suspend playbook, **cascade revocation** across delegated mandates | ✅ | `src/aegis/control/soc.py` |
 | Shadow-agent discovery (Gateway traffic + IdP scan), claim / quarantine | ✅ | `src/aegis/control/discovery.py` |
-| Re-attestation campaign, leaver → orphaned agents | ✅ (basic) | `registry.py` |
+| Ownership re-attestation: scheduled campaigns (default every 90 days), overdue alert (DET-14) or auto-suspend, leaver → orphaned agents, owner hand-over | ✅ | `ownership.py`, `registry.py` |
 | Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
 | Auditor-only demo evidence pack: HTML report, JSON records, SHA-256 manifest and offline verifier | ✅ (local demo) | `src/aegis/control/evidence.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |

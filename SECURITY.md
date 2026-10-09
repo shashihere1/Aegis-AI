@@ -56,8 +56,34 @@ The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for 
 - **One identity per role** (`AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT=true`, set by the Keycloak env script): a sign-in whose
   token maps to more than one Aegis role is refused, so conflicting duties (registering and approving an agent,
   authoring and approving policy) cannot sit on one login. Aegis still checks separation of duties per action on top of
-  this. Limits: the rule counts roles, not people, so one human who is given two accounts can still use both; the
-  organisation must issue accounts per duty and review who holds which. It does not apply to the passwordless dev IdP.
+  this. It does not apply to the passwordless dev IdP.
+- **One person, many accounts** (`AEGIS_OIDC_PERSON_CLAIM`, `AEGIS_PERSON_LINKS`): every separation-of-duties check
+  (registrant/owner cannot approve an agent, the initiator or an owner cannot approve an action, a policy's author cannot
+  review or activate it) compares the *person* behind an account, not the username, so one human's role accounts cannot be
+  used to approve their own work. An account's person comes from the trusted `AEGIS_PERSON_LINKS` directory (JSON
+  `{"account": "person"}`, wins), else from the token claim named by `AEGIS_OIDC_PERSON_CLAIM` (for example
+  `employee_id`), else it is the account name alone. When the claim is configured, a staff login without it (and without a
+  link) is refused, because it could not be tied to a person. Each sign-in records account → person, so a name stored on
+  a record (an agent's owner) resolves even when that person is not signed in; an owner who has never signed in and has no
+  link resolves to their own name only. The `keycloak_setup env` script sets `AEGIS_PERSON_LINKS` for the demo's role accounts.
+- **Ownership re-attestation** (`ownership.py`): owners must periodically confirm each active agent. Every confirmation is
+  the ledger entry `attestation.confirmed`, so "last attested" is provable from the tamper-evident ledger. A background job
+  (`AEGIS_ATTESTATION_INTERVAL_DAYS`, default 90; 0 = manual only) marks an agent due when its last confirmation or
+  activation is older than the interval and gives the owner `AEGIS_ATTESTATION_GRACE_DAYS` (default 14). An overdue agent
+  raises alert DET-14 once per due date; with `AEGIS_ATTESTATION_AUTO_ENFORCE=true` it is also suspended (default off, so a
+  person decides before a live agent stops). A new campaign never extends a deadline that is already running.
+  *Hand-over:* `POST /v1/agents/{id}/owner` moves an agent to a new owner (the current owner, a risk-approver or an admin);
+  it clears the orphaned flag, starts the grace period for the new owner, and is recorded as `agent.owner_reassigned`.
+  The new owner must not have left, may not be the same person as the old owner, and a person cannot make themselves the
+  owner (SOD-004). A leaver orphans their suspended agents as well as their active ones. Limits: the job runs in every
+  control-plane process (a pass is idempotent, so a second process only repeats work); it does not start on an in-memory
+  database (use `POST /v1/attestations/run`); a leaver is matched by exact owner name, so only the dev IdP can mark a
+  person as having left (with SSO, report them with `POST /v1/idp-events/leaver`).
+- **Agents are managed only by their owner:** suspend, modify, submit, retire and attest act on an agent only for its
+  owner (under any of their accounts). The `agent-owner` role alone grants nothing over other people's agents. The
+  exceptions are deliberate: `soc-analyst` and `risk-approver` can suspend any agent (the kill switch must not wait for an
+  owner), `admin` can modify, submit and retire any agent, and the registrant can modify and submit the agent they
+  registered (changes to an active agent still force re-approval). Denials return `OWN-001`.
 - **Local signing keys** persist in the protected `.local/keys` folder for the PostgreSQL console. Test keys are
   ephemeral. Neither approach is a production key store; use Azure Key Vault in a shared environment.
   - *Explicit creation, strict startup.* Persistent keys are created once, out of band, with

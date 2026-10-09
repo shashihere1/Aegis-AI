@@ -43,6 +43,7 @@ class OidcConfig:
     scopes: str = "openid profile email"
     clock_skew: int = 60
     one_role_per_account: bool = False
+    person_claim: str = ""
     builtin: bool = False
 
     @classmethod
@@ -73,6 +74,7 @@ class OidcConfig:
             scopes=s.oidc_scopes,
             clock_skew=s.oidc_clock_skew,
             one_role_per_account=s.oidc_one_role_per_account,
+            person_claim=s.oidc_person_claim.strip(),
             builtin=s.builtin_oidc and not s.oidc_issuer.strip(),
         )
 
@@ -198,11 +200,13 @@ class OidcVerifier:
                 f"account {username} holds {len(roles)} Aegis roles ({', '.join(sorted(roles))}); "
                 "sign in with a separate account for each role"
             )
+        person = as_list(claim_path(claims, cfg.person_claim)) if cfg.person_claim else []
         return Persona(
             username=str(username),
             name=str(claim_path(claims, cfg.name_claim) or username),
             roles=roles,
             entitlements=as_list(claim_path(claims, cfg.entitlements_claim)),
+            person_id=person[0].strip() if len(person) == 1 and person[0].strip() else None,
         )
 
     async def authenticate(self, token: str) -> Persona:

@@ -9,6 +9,7 @@ import pytest
 
 from aegis.control.evidence_verify import verify_pack
 from aegis.control.tables import Alert, LedgerEntry
+from aegis_demo import catalog
 from aegis_demo.world import BASE, seed_registry
 
 
@@ -20,6 +21,7 @@ async def test_auditor_can_download_verifiable_pack(world):
     assert preview.status_code == 200
     assert preview.json()["integrity"]["ok"] is True
     assert preview.json()["counts"]["agents"] == len(world.agent_ids)
+    assert len(world.agent_ids) == len(catalog.AGENTS)  # every functional demo agent is registered
 
     response = await world.api("eva.visser", "GET", "/v1/evidence/pack")
     assert response.status_code == 200

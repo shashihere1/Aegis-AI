@@ -133,7 +133,7 @@ async def test_postgres_restart_policy_cases_keys_concurrency_and_evidence(tmp_p
                 case["status"] == "investigating" and case["events"][0]["detail"]["note"] == "Persisted investigation"
             )
             async with world.ctx.db.sessionmaker() as s:
-                assert await s.scalar(select(func.count()).select_from(Agent)) == 3
+                assert await s.scalar(select(func.count()).select_from(Agent)) == len(ids)
                 assert await s.scalar(select(func.count()).select_from(PolicyVersion)) == 2
                 assert await s.scalar(select(func.count()).select_from(DecisionRecord)) == decision_count
                 assert await s.scalar(select(func.count()).select_from(TraceSpan)) >= span_count
