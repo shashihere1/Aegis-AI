@@ -56,13 +56,22 @@ def create_app(
         db=Database(settings.database_url, settings.database_schema),
         idp=idp_module.DevIdp(
             f"{settings.control_url}/idp",
-            SigningKey.load_or_generate(settings.idp_key_path, "idp-1"),
+            SigningKey.ensure(settings.idp_key_path, "idp-1"),
             settings.identity_state_dir,
         ),
-        sts_key=SigningKey.load_or_generate(settings.signing_key_path, "sts-1"),
+        sts_key=SigningKey.ensure(settings.signing_key_path, "sts-1"),
         hotstore=hotstore or make_hotstore(settings.hotstore_url),
         http=http,
         taxonomy=load_taxonomy(),
+    )
+    # Public-key fingerprints only (never the private key). Persistent keys keep the same fingerprint
+    # across restarts; an ephemeral one changes every start, which is the signal it is dev-only.
+    log.info(
+        "signing keys ready: sts fingerprint=%s (%s), idp fingerprint=%s (%s)",
+        context.sts_key.fingerprint,
+        "persistent" if settings.signing_key_path else "ephemeral",
+        context.idp.key.fingerprint,
+        "persistent" if settings.idp_key_path else "ephemeral",
     )
     oidc_config = OidcConfig.from_settings(settings)
     own_http: httpx.AsyncClient | None = None
