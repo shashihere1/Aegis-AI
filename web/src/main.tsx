@@ -26,6 +26,7 @@ import { Studio } from "./pages/Studio";
 import { SignIn } from "./pages/SignIn";
 import { AuthCallback } from "./pages/AuthCallback";
 import { BankAssistant } from "./pages/BankAssistant";
+import { Copilot } from "./pages/Copilot";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 1000 } },
@@ -63,6 +64,7 @@ const router = createBrowserRouter(
         { path: "evidence", element: <Evidence /> },
         { path: "studio", element: <Studio /> },
         { path: "assistant", element: <BankAssistant /> },
+        { path: "copilot", element: <Copilot /> },
         { path: "*", element: <Navigate to="/agents" replace /> },
       ],
     },

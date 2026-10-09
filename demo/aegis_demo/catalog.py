@@ -1,5 +1,7 @@
 """Tool classifications, personas and agent manifests for the demo bank ("agents and tools as code")."""
 
+from aegis.common.investigation import ENTITLEMENT, INTENT, SERVER, TOOLS
+
 TOOL_CLASSIFICATION = {
     "core-banking.get_balance": {
         "intent_tags": ["customer.inquiry.read"],
@@ -67,6 +69,19 @@ TOOL_CLASSIFICATION = {
         "returns_data_class": "public",
     },
 }
+TOOL_CLASSIFICATION.update(
+    {
+        f"{SERVER}.{name}": {
+            "intent_tags": [INTENT],
+            "side_effect": "read",
+            "egress": "none",
+            "returns_data_class": "confidential",
+            "required_entitlement": ENTITLEMENT,
+            "rate_limit_per_min": 30,
+        }
+        for name in TOOLS
+    }
+)
 
 # Fictional personas (plan §13.2). Jan is a retail customer; the others are bank staff.
 PERSONAS = [
@@ -86,6 +101,16 @@ PERSONAS = [
 ]
 
 AGENTS = {
+    "investigation-copilot": {
+        "name": "Aegis-Investigation-Copilot",
+        "purpose": "Explain recorded agent activity to authorized investigators using cited read-only evidence.",
+        "intent_categories": [INTENT],
+        "framework": "azure-tool-calling",
+        "autonomy": "L0",
+        "max_data_class": "confidential",
+        "max_depth": 0,
+        "capabilities": [f"{SERVER}.{name}" for name in TOOLS],
+    },
     "kyc-agent": {
         "name": "KYC-Verification-Agent",
         "purpose": "Verify customer identity documents for KYC refresh and address changes.",

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common.hashing import tool_definition_hash
 from aegis.common.ids import new_id
+from aegis.common.investigation import upstream_headers
 from aegis.common.models import McpServerCreate, ToolClassification
 from aegis.control import ledger
 from aegis.control.auth import OPERATORS, require_roles
@@ -35,8 +36,8 @@ def default_classification(annotations: dict) -> dict:
     return ToolClassification(side_effect=side_effect, egress=egress).model_dump()
 
 
-async def list_upstream_tools(c: ControlContext, url: str) -> list[dict]:
-    response = await c.http.post(url, headers=MCP_HEADERS,
+async def list_upstream_tools(c: ControlContext, url: str, server_id: str = "") -> list[dict]:
+    response = await c.http.post(url, headers={**MCP_HEADERS, **upstream_headers(c.settings, server_id, url)},
                                  json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
     response.raise_for_status()
     return response.json()["result"]["tools"]
@@ -78,7 +79,7 @@ def router() -> APIRouter:
             raise HTTPException(404, "unknown server")
         c: ControlContext = request.app.state.ctx
         result = {"new": [], "unchanged": [], "drifted": []}
-        for upstream in await list_upstream_tools(c, server.url):
+        for upstream in await list_upstream_tools(c, server.url, server_id):
             tool_id = f"{server_id}.{upstream['name']}"
             digest = tool_definition_hash(upstream)
             tool = await s.get(Tool, tool_id)

@@ -41,7 +41,8 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
 | React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
 | Sign-in for people through any OpenID Connect provider (Keycloak, Microsoft Entra ID, Okta...): authorization code + PKCE, signature/issuer/audience/expiry checks, provider roles mapped to Aegis roles; dev login can be switched off | ✅ (tested against a fake provider and a built-in one; not yet against a live Keycloak or Entra tenant) | `src/aegis/control/identity/oidc.py`, `users.py`, `web/src/lib/auth.ts` |
-| Regulatory-grade evidence packs, Copilot, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities and managed OPA policy publishing | ⏳ remaining | — |
+| Natural-language investigation Copilot (PS G2), investigator RBAC, read-only MCP evidence and verified citation IDs | Implemented; offline regression coverage, live Azure acceptance pending | `src/aegis/control/investigation.py`, `demo/aegis_demo/copilot.py` |
+| Regulatory-grade evidence packs, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities and managed OPA policy publishing | ⏳ remaining | — |
 
 ## The console
 
@@ -56,7 +57,75 @@ A React + TypeScript console in the look of the Fabric Vibe Studio prototype, on
 | Prompt Injection · Usage & Cost | Detections with highlighted payloads and a scan playground; tokens, cost and latency per agent |
 | Access Control · Approvals | Live Mandates with countdowns and revoke; approval cards bound to the exact action (amount, IBAN, chain) |
 | MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved configuration versions, replay and rollback; reference Rego source; hash-chain verification and evidence export |
-| Demo Studio (also the floating button) | Runs scenes S2–S5 and A4 against the real APIs, with a step-by-step run log and a reset |
+| Demo Studio | Runs scripted scenes S2–S5 and A4 against the real APIs, with a step-by-step run log and a reset |
+| Investigation Copilot (also the floating bot for investigators) | Real Azure tool selection through Aegis; cited, redacted excerpts from recorded decisions, alerts, traces and other audit records; read-only |
+
+### Investigation Copilot (PS good-to-have G2)
+
+This is separate from Ava's banking assistant. Start the updated server using your existing Azure configuration,
+then open **http://127.0.0.1:8000/ui/copilot**. In development, select **Mark Jansen (SOC analyst)** or
+**Eva Visser (auditor)**. Other roles and anonymous callers cannot use the investigation API. With OIDC,
+the verified role mapping must grant `soc-analyst` or `auditor`; the server derives `investigation.read`
+only for those roles. A caller-supplied entitlement alone cannot grant investigation access.
+
+Confirm that the question and records are synthetic and that you authorize paid Azure inference, then ask:
+
+- “Why was Ava blocked in the last 24 hours?”
+- “Which agents acted for jan.devries in the last week?”
+- “What alerts were raised in the last 24 hours?”
+- “Show approvals of at least EUR 10,000 approved by sanne.bakker in the last week.”
+- “Show the recorded timeline for trace `<exact trace ID from Activity or Lineage>`.”
+
+Azure selects up to three fixed read-only tools on the `aegis-investigate` MCP server, then produces a
+structured cited answer. The registered `Aegis-Investigation-Copilot` obtains its own purpose-bound Mandate
+on behalf of the investigator. The existing gateway handles tool approval/pins, scope, entitlements,
+revocation and model budget/data-class/processing-scope checks. No new provider, package or cloud resource
+is required, and there is no fake-model fallback. Startup onboards this agent and its tools using the
+existing development bootstrap approval flow; this is not a new enterprise approval process.
+
+The tools are `search_decisions`, `get_agent`, `get_trace_timeline`, `get_delegation_chain`, `list_alerts`,
+`usage_summary`, `get_lineage`, `get_policy_version` and `search_approvals`. There is **no arbitrary SQL,
+bank action, policy change, approval mutation or containment tool**. Query arguments are typed and bounded.
+The upstream MCP endpoint requires a random gateway-only credential, never the browser's token. The broker
+sends it only to the exact reserved local URL; it is not forwarded to other registry-controlled destinations.
+For separately deployed services, configure the same protected `AEGIS_INVESTIGATION_TOKEN` on both sides;
+the current composition shares it in memory. This is not workload identity or a vault integration.
+
+Every factual statement must cite an ID actually retrieved in that investigation. Open a source to see
+the server-generated record ID, console link and redacted excerpt. Invalid/missing citations, malformed
+responses and incomplete completions are rejected. Citation checking establishes **provenance, not factual
+correctness of model reasoning**; review the source records. Empty results explicitly report missing evidence.
+Queries default to 24 hours UTC, allow at most 31 days and return at most five rows per model call; exact ID
+lookups and lineage are separate. Truncation and query filters are shown. This is not exhaustive search or
+a regulatory investigation report. Missing traces cannot be reconstructed as proof of execution.
+
+Raw prompts, tool arguments/results, alert payloads and trace attributes are not sent to Azure. Typed payment
+amounts are exposed without beneficiary details for approval investigations. Pattern-based secret/PII masking
+is an additional safeguard, not complete DLP. Do not use real customer records in this synthetic-only console.
+
+Question/answer snapshots, citation excerpts, query coverage and usage metadata persist in the configured
+database's **`copilot_runs`** table (PostgreSQL in the normal local setup). Startup creates the new table;
+no manual SQL is needed. Starts/finishes are recorded in the hash-chain ledger; model and tool decisions
+appear under the Copilot's own root Mandate in Activity/Lineage. Histories are private to each investigator.
+Bearer tokens and keys are not stored in history. Request UUIDs prevent the same request from triggering
+another paid call. The single-process console serializes admission; production multi-worker admission would
+need additional coordination. Interrupted runs are marked interrupted on restart, never resumed or replayed.
+
+The UI requires explicit consent, never automatically retries a paid request, and resets on persona changes.
+Up to four Azure completions can incur charges per investigation; all costs shown are configured estimates,
+not Azure invoices. OPA remains unchanged. This initial implementation returns a complete answer, not a
+streaming token response, and cannot recover records that were never collected.
+
+Offline verification (does not call Azure):
+
+```powershell
+.\.venv\Scripts\python -m pytest tests/test_copilot.py -q -p no:cacheprovider
+cd web
+npm run build
+```
+
+The structured-answer and function-call contracts follow the existing Chat Completions gateway and the
+[official structured-output guidance](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 The header's persona switcher logs in as Mark (SOC), Sanne (risk approver), Priya (developer), Fatima (security),
 Eva (auditor) or the admin, and buttons a persona may not use are disabled with the required role in the tooltip,

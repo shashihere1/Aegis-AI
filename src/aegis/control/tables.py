@@ -42,6 +42,18 @@ class AgentRun(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class CopilotRun(Base):
+    """Persisted answer/evidence history. No tokens, keys or resumable credentials."""
+
+    __tablename__ = "copilot_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(120), index=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(30))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Agent(Base):
     __tablename__ = "agents"
     id: Mapped[str] = mapped_column(String(20), primary_key=True)

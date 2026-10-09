@@ -21,11 +21,13 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from aegis.common.ids import agent_id as new_agent_id
+from aegis.common.investigation import SERVER
 from aegis.common.models import AgentStatus
 from aegis.common.settings import REPO_ROOT, Settings
 from aegis.control.app import create_app
 from aegis.control.identity.agent_identity import IdentityNotFound
 from aegis.control.identity.idp import Persona
+from aegis.control.investigation import investigation_app
 from aegis.control.policies import ManagedEngine
 from aegis.control.tables import Agent, McpServer
 from aegis.gateway.app import create_gateway
@@ -36,6 +38,7 @@ from aegis.telemetry import TraceMiddleware, tracing_headers
 from aegis_demo import catalog
 from aegis_demo.agent_api import interrupt_history
 from aegis_demo.agents import Ava, kyc_agent_app, payments_agent_app
+from aegis_demo.copilot import interrupt_copilot_history
 from aegis_demo.data import DOCUMENTS
 from aegis_demo.fake_llm import fake_llm_app
 from aegis_demo.mcp_servers import SERVERS
@@ -151,7 +154,7 @@ async def bootstrap(w: World) -> None:
         existing_servers = set((await s.scalars(select(McpServer.id))).all())
         existing_agents = {a.name: a for a in (await s.scalars(select(Agent))).all()}
 
-    for server_id in SERVERS:
+    for server_id in w.mounts:
         if server_id in existing_servers:
             continue
         vendor = "third-party" if server_id == "fx-rates" else "internal"
@@ -340,6 +343,7 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
         telemetry=control.state.ctx.telemetry,
     )
     servers = {name: factory().streamable_http_app() for name, factory in SERVERS.items()}
+    servers[SERVER] = investigation_app(control.state.ctx)
     kyc_app, payments_app = kyc_agent_app(), payments_agent_app()
     gateway.add_middleware(TraceMiddleware, telemetry=control.state.ctx.telemetry, service="aegis.gateway")
     for name, app in servers.items():
@@ -383,6 +387,7 @@ async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_rou
         holder["world"] = world
         await bootstrap(world)
         await interrupt_history(world)
+        await interrupt_copilot_history(world)
         if seed:
             await seed_registry(world, seed)
         try:

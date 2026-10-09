@@ -2,6 +2,7 @@
 
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Literal
 
@@ -81,6 +82,8 @@ class Settings(BaseModel):
 
     # Shared secret for gateway -> control-plane internal calls (Key Vault reference in Azure).
     internal_token: str = Field(default="dev-internal-token", repr=False)
+    # One-process demo shares this random capability. Separate services must configure a protected shared value.
+    investigation_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
 
     # Gateway caches (seconds). 0 disables caching, which tests use for determinism.
     cache_seconds: float = 2.0

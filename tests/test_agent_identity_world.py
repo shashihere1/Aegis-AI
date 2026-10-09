@@ -77,8 +77,8 @@ async def test_every_demo_agent_gets_its_own_identity_in_keycloak(kc_world):
     world, fake = kc_world
     registry = {a["name"]: a for a in (await world.api("mark.jansen", "GET", "/v1/agents?q=Ava")).json()["items"]}
     managed = fake.managed()
-    assert len(managed) == 3  # Ava, the KYC agent and the Payments agent
-    assert len({c["clientId"] for c in managed}) == 3
+    assert len(managed) == len(world.agent_ids) == 4  # Ava, KYC, Payments and the read-only investigation Copilot
+    assert len({c["clientId"] for c in managed}) == len(world.agent_ids)
     for client in managed:
         assert client["clientAuthenticatorType"] == "client-jwt" and client["publicClient"] is False
         assert client["clientId"] == f"agent-{client['attributes']['aegis.agent_id'].lower()}"
@@ -255,7 +255,8 @@ async def test_reconcile_reports_identities_that_are_missing_or_orphaned(kc_worl
 async def test_identity_status_endpoint_and_start_up_resilience(kc_world):
     world, fake = kc_world
     status = (await world.api("mark.jansen", "GET", "/v1/identity/status")).json()
-    assert status["provider"] == "keycloak" and status["reachable"] is True and status["agents_with_identity"] == 3
+    assert status["provider"] == "keycloak" and status["reachable"] is True
+    assert status["agents_with_identity"] == len(world.agent_ids)
     fake.down = True
     down = (await world.api("mark.jansen", "GET", "/v1/identity/status")).json()
     assert down["reachable"] is False and "detail" in down

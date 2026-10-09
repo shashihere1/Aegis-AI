@@ -5,8 +5,11 @@ token's issuer decides which verifier checks it, and that verifier then checks e
 is not configured is rejected.
 """
 
+from dataclasses import replace
+
 import jwt
 
+from aegis.common.investigation import ENTITLEMENT, ROLES
 from aegis.common.settings import Settings
 from aegis.control.identity.idp import DevIdp, Persona
 from aegis.control.identity.oidc import OidcVerifier
@@ -34,7 +37,13 @@ class UserAuthenticator:
         if issuer == self.idp.issuer:
             if not self.settings.enable_dev_login:
                 raise jwt.InvalidTokenError("development login is disabled")
-            return self.idp.verify_user_token(token)
-        if self.oidc is not None and issuer == self.oidc.config.issuer:
-            return await self.oidc.authenticate(token)
-        raise jwt.InvalidTokenError("the token was issued by an unknown issuer")
+            persona = self.idp.verify_user_token(token)
+        elif self.oidc is not None and issuer == self.oidc.config.issuer:
+            persona = await self.oidc.authenticate(token)
+        else:
+            raise jwt.InvalidTokenError("the token was issued by an unknown issuer")
+        # This capability is role-derived, never a caller-supplied grant. Apply after verification for both IdPs.
+        entitlements = [e for e in persona.entitlements if e != ENTITLEMENT]
+        if set(persona.roles).intersection(ROLES) and persona.status == "active":
+            entitlements.append(ENTITLEMENT)
+        return replace(persona, entitlements=entitlements)

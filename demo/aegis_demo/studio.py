@@ -23,6 +23,7 @@ from aegis.sdk import AegisDenied, LlmCallError
 from aegis_demo import mcp_servers
 from aegis_demo.agent_api import router as agent_router
 from aegis_demo.agents import structured
+from aegis_demo.copilot import router as copilot_router
 from aegis_demo.data import DOCUMENTS, LANDLORD_IBAN
 from aegis_demo.mcp_servers import kyc
 
@@ -50,6 +51,7 @@ class LlmSmokeRequest(BaseModel):
 def studio_app(get_world: Callable) -> FastAPI:
     app = FastAPI(title="Aegis demo studio")
     app.include_router(agent_router(get_world))
+    app.include_router(copilot_router(get_world))
     runs: list[dict] = []
     state = {"kyc_variant": "v1"}
     counter = itertools.count(1)

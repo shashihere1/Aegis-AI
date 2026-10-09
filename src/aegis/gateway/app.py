@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from opentelemetry import trace
 
 from aegis.common.hashing import action_hash, tool_definition_hash
+from aegis.common.investigation import ENTITLEMENT, SERVER, upstream_headers
 from aegis.common.settings import Settings
 from aegis.gateway.control_client import ControlPlaneClient
 from aegis.gateway.llm import AzureChatUpstream, LlmError, bounded_chat, completion_usage, safe_request_id
@@ -184,7 +185,15 @@ def create_gateway(
 
     async def upstream_call(server_url: str, server_id: str, body: dict) -> dict:
         response = await http.post(
-            server_url, headers=tracing_headers({**MCP_HEADERS, **brokered_headers(server_id)}), json=body
+            server_url,
+            headers=tracing_headers(
+                {
+                    **MCP_HEADERS,
+                    **brokered_headers(server_id),
+                    **upstream_headers(settings, server_id, server_url),
+                }
+            ),
+            json=body,
         )
         response.raise_for_status()
         return parse_mcp_response(response)
@@ -225,6 +234,10 @@ def create_gateway(
         if server_url is None:
             return JSONResponse(rpc_error(rpc_id, DENIED, "unknown MCP server"), status_code=404)
         scopes = claims["scope"].split()
+        if server_id == SERVER and ENTITLEMENT not in claims["aegis"].get("ent", []):
+            return JSONResponse(
+                rpc_error(rpc_id, DENIED, "Investigation requires an analyst or auditor entitlement."), status_code=403
+            )
 
         with tracer.start_as_current_span(f"mcp {method}") as span:
             span.set_attributes(

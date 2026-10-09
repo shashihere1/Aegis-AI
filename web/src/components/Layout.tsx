@@ -35,6 +35,7 @@ import { useSession } from "../lib/session";
 import type { AgentPage } from "../lib/types";
 import { Avatar, cx } from "./ui";
 import { StudioLauncher } from "./StudioLauncher";
+import { CopilotLauncher } from "../pages/Copilot";
 
 interface NavItem {
   to: string;
@@ -45,6 +46,7 @@ interface NavItem {
 }
 
 function useNav(): { section: string; items: NavItem[] }[] {
+  const { can } = useSession();
   const stats = useStats().data;
   const alerts = useAlerts().data ?? [];
   const findings = useFindings().data ?? [];
@@ -70,6 +72,7 @@ function useNav(): { section: string; items: NavItem[] }[] {
         { to: "/lineage", label: "Agent Lineage", icon: GitFork },
         { to: "/injection", label: "Prompt Injection", icon: ShieldAlert, badge: injections, tone: "critical" },
         { to: "/usage", label: "Usage & Cost", icon: Coins },
+        ...(can("soc-analyst", "auditor") ? [{ to: "/copilot", label: "Investigation Copilot", icon: Bot }] : []),
       ],
     },
     {
@@ -98,10 +101,21 @@ function Sidebar() {
 }
 
 function CustomerSidebar() {
-  return <aside className="w-64 shrink-0 border-r border-line bg-panel p-5">
-    <div className="mb-6 font-semibold">Aegis · Synthetic bank</div>
-    <NavLink to="/assistant" className="text-accent">Bank Assistant</NavLink>
-    <p className="mt-4 text-xs text-muted">Customer view. Staff approvals and audit records use separate roles.</p>
+  return <aside className="hidden w-64 shrink-0 flex-col border-r border-line bg-panel lg:flex">
+    <div className="flex items-center gap-3 border-b border-line px-5 py-5">
+      <div className="grid size-11 place-items-center rounded-xl bg-accent-soft text-accent"><ShieldCheck className="size-6" /></div>
+      <div><div className="font-semibold">Aegis AI</div><div className="text-xs text-muted">Synthetic banking workspace</div></div>
+    </div>
+    <nav className="flex-1 p-3" aria-label="Customer navigation">
+      <div className="mb-2 px-3 pt-2 text-[11px] font-semibold tracking-wider text-faint uppercase">Your workspace</div>
+      <NavLink to="/assistant" className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent-soft px-3 py-3 text-sm font-medium text-accent">
+        <MessageSquare className="size-[18px]" />Bank Assistant
+      </NavLink>
+    </nav>
+    <div className="m-3 rounded-xl border border-line bg-inset p-4">
+      <div className="flex items-center gap-2 text-xs font-medium"><ShieldCheck className="size-4 text-accent" />You're in the customer view</div>
+      <p className="mt-2 text-xs leading-relaxed text-muted">You review your actions. Staff approvals and audit records use separate roles.</p>
+    </div>
   </aside>;
 }
 
@@ -181,7 +195,7 @@ function PersonaSwitcher() {
         <ChevronDown className="size-4" />
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-2 max-h-[80vh] w-80 overflow-y-auto rounded-xl border border-line-strong bg-card p-1.5 shadow-2xl" role="menu" onMouseLeave={() => setOpen(false)}>
+        <div className="absolute right-0 z-30 mt-2 max-h-[80vh] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-line-strong bg-card p-1.5 shadow-2xl" role="menu" onMouseLeave={() => setOpen(false)}>
           {config?.oidc && !sso && (
             <>
               <button
@@ -369,7 +383,7 @@ function useTheme(): [string, () => void] {
 }
 
 export function Layout() {
-  const { can } = useSession();
+  const { can, persona } = useSession();
   const customer = can("customer");
   const location = useLocation();
   const navigate = useNavigate();
@@ -393,39 +407,39 @@ export function Layout() {
     <div className="flex h-full">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line bg-panel/80 px-6 backdrop-blur">
+        <header className={cx("flex h-16 shrink-0 items-center gap-3 border-b border-line bg-panel/80 backdrop-blur", customer ? "px-3 sm:px-6" : "px-6")}>
           <button onClick={() => navigate(-1)} className="text-faint hover:text-fg" aria-label="Back">
             <ChevronLeft className="size-5" />
           </button>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="text-muted">ABN AMRO</span>
-            <span className="text-faint">›</span>
-            <span className="text-muted">Aegis AI</span>
-            <span className="text-faint">›</span>
-            <span className="font-semibold">{TITLES[section] ?? "Agent"}</span>
+          <div className={cx("flex items-center gap-2 text-sm", customer && "min-w-0 flex-1")}>
+            <span className={cx("text-muted", customer && "hidden xl:inline")}>ABN AMRO</span>
+            <span className={cx("text-faint", customer && "hidden xl:inline")}>›</span>
+            <span className={cx("text-muted", customer && "hidden sm:inline")}>Aegis AI</span>
+            <span className={cx("text-faint", customer && "hidden sm:inline")}>›</span>
+            <span className={cx("font-semibold", customer && "truncate")}>{TITLES[section] ?? "Agent"}</span>
           </div>
-          <button
+          {!customer && <button
             onClick={() => setPaletteOpen(true)}
             className="mx-auto flex h-10 w-full max-w-md items-center gap-2 rounded-xl border border-line-strong bg-inset px-3 text-sm text-faint hover:border-accent/50"
           >
             <Search className="size-4" />
             <span className="flex-1 text-left">Search agents, owners, IDs…</span>
             <kbd className="rounded border border-line-strong px-1.5 text-xs">Ctrl K</kbd>
-          </button>
+          </button>}
           <PersonaSwitcher />
           {!customer && <Notifications />}
           <button onClick={toggleTheme} className="grid size-10 place-items-center rounded-xl text-muted hover:bg-hover hover:text-fg" aria-label="Toggle theme">
             {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
           </button>
         </header>
-        <main className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
+        <main className={cx("min-h-0 flex-1 overflow-y-auto", section === "assistant" ? "px-3 py-5 sm:px-6 lg:px-8 lg:py-7" : "px-8 py-7")}>
           <div className="mx-auto max-w-[1500px]">
             <Outlet />
           </div>
         </main>
       </div>
       {!customer && <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />}
-      {!customer && <StudioLauncher />}
+      {!customer && section !== "copilot" && (can("soc-analyst", "auditor") ? <CopilotLauncher key={persona?.username} /> : <StudioLauncher />)}
     </div>
   );
 }
