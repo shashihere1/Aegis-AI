@@ -162,7 +162,9 @@ Replay evaluates recorded context only, without invoking tools, payment executio
 SOC assignments must name active analysts. Case transitions are validated; resolution/false-positive status
 requires a note. Notes and evidence links are appended to the audit ledger. PostgreSQL triggers reject direct
 UPDATE/DELETE of ledger and case-event rows, and transaction-scoped advisory locks serialize ledger appends.
-Database-owner/admin privileges can bypass those controls: this is not externally anchored, tamper-proof storage.
+Database-owner/admin privileges can bypass those triggers, but not the signed evidence checkpoints: a rewritten
+history no longer matches them unless the evidence key itself is also stolen. Keep that key in an HSM-backed Key
+Vault in production. Deleting the most recent checkpoints is detectable only against an earlier exported pack.
 
 Adaptive risk uses recorded decisions and alerts, with a documented warm-up and active-minute median/MAD
 baseline. No training history or scores are fabricated. Effective enforcement cannot reduce inherent risk.

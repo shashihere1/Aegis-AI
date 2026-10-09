@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -128,9 +128,16 @@ def create_app(
                 log.info("identity reconcile: %s", {k: v for k, v in report.items() if v})
             except IdentityUnavailable as exc:
                 log.warning("identity provider unavailable at start-up: %s", exc)
+        background = []
+        if settings.discovery_scan_interval:
+            background.append(asyncio.create_task(discovery.scan_periodically(context)))
         try:
             yield
         finally:
+            for task in background:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
             if context.evidence_task is not None:
                 context.evidence_task.cancel()
                 await asyncio.gather(context.evidence_task, return_exceptions=True)

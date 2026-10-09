@@ -441,11 +441,17 @@ def create_gateway(
                     {"limit_per_min": obligation["limit"]},
                 )
 
-        upstream = await upstream_call(server_url, server_id, body, claims)
+        try:
+            upstream = await upstream_call(server_url, server_id, body, claims)
+        except Exception:
+            # The call was permitted but never completed; record that, so lineage does not show a silent gap.
+            await record(claims, tool_id, verdict, snapshot={**policy_input, "outcome": "failed"}, started=started)
+            raise
         if approval_ctx and approval_ctx["status"] == "approved":
             await cp.consume_approval(approval_ctx["id"])
 
         result = upstream.get("result", {})
+        outcome = "tool_error" if "error" in upstream or result.get("isError") else "executed"
         guard = scan_text(result_text(result))
         if guard.injection:
             await hotstore.update_taint(meta["root_id"], tainted_by=f"injection:{tool_id}")
@@ -476,7 +482,7 @@ def create_gateway(
             claims,
             tool_id,
             verdict,
-            snapshot={**policy_input, "redactions": redactions, "guard_score": guard.score},
+            snapshot={**policy_input, "redactions": redactions, "guard_score": guard.score, "outcome": outcome},
             data_class=classification.get("returns_data_class"),
             started=started,
         )

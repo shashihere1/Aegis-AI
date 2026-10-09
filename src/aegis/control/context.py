@@ -38,6 +38,8 @@ class ControlContext:
     gateway_service_public_pem: str = ""  # Gateway's public key, to authenticate its internal calls
     evidence_key: SigningKey | None = None  # signs ledger checkpoints and evidence packs (never tokens)
     llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    discovery_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    discovery_status: dict = field(default_factory=dict)  # last identity-provider scan; in memory, per process
 
     @property
     def sts_issuer(self) -> str:

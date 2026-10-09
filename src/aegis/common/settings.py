@@ -95,6 +95,8 @@ class Settings(BaseModel):
     keycloak_admin_client_id: str = "aegis-control-plane"  # service account holding manage-clients / view-clients
     keycloak_admin_client_secret: str = Field(default="", repr=False)  # Key Vault reference in Azure
     agent_token_ttl: int = 300  # seconds an agent's identity token lives (Keycloak enforces it per client)
+    # Seconds between automatic identity-provider scans for ungoverned identities. 0 = on demand only.
+    discovery_scan_interval: int = Field(default=0, ge=0, le=86400)
 
     mandate_default_ttl: int = 300
     max_delegation_depth: int = 3

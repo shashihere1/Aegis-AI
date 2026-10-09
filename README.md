@@ -30,9 +30,9 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Prompt-injection detection + session taint + **lethal-trifecta breaker** (IFC-001) | ✅ | `src/aegis/guard/`, policies |
 | PII redaction (BSN 11-proof, IBAN, e-mail, phone) as a policy obligation | ✅ | `src/aegis/guard/pii.py` |
 | SOC detections, auto-suspend playbook, **cascade revocation** across delegated mandates | ✅ | `src/aegis/control/soc.py` |
-| Shadow-agent discovery (Gateway traffic + IdP scan), claim / quarantine | ✅ | `src/aegis/control/discovery.py` |
+| Shadow-agent discovery: Gateway traffic (real time) + identity-provider scan (scheduled via `AEGIS_DISCOVERY_SCAN_INTERVAL`, and on demand), claim / quarantine | ✅ (telemetry, code and cloud sources planned, shown as such in the console) | `src/aegis/control/discovery.py` |
 | Ownership re-attestation: scheduled campaigns (default every 90 days), overdue alert (DET-14) or auto-suspend, leaver → orphaned agents, owner hand-over | ✅ | `ownership.py`, `registry.py` |
-| Lineage graph user → agents → tools → data | ✅ | `soc.py` (`/v1/lineage/{root}`) |
+| End-to-end lineage user → agents → tools → data → human approvals → **result** (completed / waiting / blocked / failed / revoked), per task and merged across a user's or an agent's recent tasks; the Gateway records each permitted call's real outcome (executed / tool error / failed) | ✅ (outcomes from earlier records show "not recorded", never guessed; the graph holds statuses and counts, not tool data) | `soc.py` (`/v1/lineage/{root}`, `/v1/lineage?subject=…\|agent_id=…`), gateway |
 | Auditor-only scoped, signed HTML/JSON/CSV reports; 15-control mappings, scheduled generation and saved review history | ✅ (synthetic application evidence; not certification) | `src/aegis/control/evidence.py`, `src/aegis/control/evidence_reports.py` |
 | LLM proxy (OpenAI-compatible → approved Azure OpenAI) with token, cost and latency capture | ✅ | gateway |
 | Versioned policy configuration **and Rego**: draft, automatic checks, replay, Rego diff, separate approval, security sign-off for rule changes, activation and rollback; the engine runs the approved Rego from the database, never the file on disk | ✅ (Rego changes on the `rego` / `opa` engines; the Python mirror changes configuration only) | `src/aegis/control/policies.py`, `src/aegis/policy/rules_check.py` |
@@ -99,9 +99,9 @@ A React + TypeScript console in the look of the Fabric Vibe Studio prototype, on
 | Page | What it shows |
 |---|---|
 | Agent Registry / agent detail | Functional registered agents only (Ava, KYC, Payments, Investigation Copilot by default), with filters and CSV export; Passport, explained risk score, capabilities, delegation rules, lifecycle trail, kill switch with blast-radius preview |
-| Shadow Agents · Re-attestation | Findings from Gateway traffic and IdP scans (claim / quarantine); attestation campaigns, enforcement, leaver handling |
+| Shadow Agents · Re-attestation | Discovery-source status (live, scheduled or planned) with the last automatic IdP scan; findings from Gateway traffic and IdP scans (claim / quarantine); attestation campaigns, enforcement, leaver handling |
 | Activity · SOC Dashboard · Alerts | Live decision stream; decisions-per-minute chart, top denied agents, playbook actions; triage drawer with evidence |
-| Agent Lineage | Registry lineage graph plus real OpenTelemetry execution timings, service names and shared trace IDs |
+| Agent Lineage | Per-task graph from user to approvals and a result node, or merged over the last 24 h for a user or an agent (call counts, denials, click a call to filter the decisions); plus real OpenTelemetry execution timings, service names and shared trace IDs |
 | Prompt Injection · Usage & Cost | Detections with highlighted payloads and a scan playground; tokens, cost and latency per agent |
 | Access Control · Approvals | Live Mandates with countdowns and revoke; approval cards bound to the exact action (amount, IBAN, chain) |
 | MCP Servers & Tools · Policy Governance · Audit Ledger | Tool classification and pins; approved versions of configuration and Rego (rules editor, repository import, check report, Rego diff, security sign-off), replay and rollback; hash-chain verification and evidence export |
@@ -433,14 +433,17 @@ See [configuration, launch commands, demonstration and limitations](docs/live-ag
 `POST /v1/agents` · `POST /v1/agents/{id}/approve|suspend|resume|retire` · `GET /v1/agents/{id}/blast-radius` ·
 `POST /sts/token` (RFC 8693) · `GET /.well-known/jwks.json` · `POST /v1/mcp/servers/{id}/import` ·
 `POST /v1/tools/{id}/approve` · `GET|POST /v1/approvals…` · `GET /v1/alerts` · `GET /v1/decisions` ·
-`GET /v1/lineage/{root}` · `GET /v1/ledger/verify` · Gateway: `POST /gw/mcp/{server}`, `POST /gw/a2a/{agent}`,
+`GET /v1/lineage/{root}` · `GET /v1/lineage?subject=|agent_id=&hours=&limit=` · `GET /v1/ledger/verify` · Gateway: `POST /gw/mcp/{server}`, `POST /gw/a2a/{agent}`,
 `POST /gw/llm/v1/chat/completions`, `GET /gw/.well-known/oauth-protected-resource/mcp/{server}` (RFC 9728).
 
-Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment).
+Auditor-only export: `GET /v1/evidence/summary` · `GET /v1/evidence/pack` (ZIP attachment) ·
+`GET /v1/evidence/key` (public evidence-key fingerprint).
 
 Policy lifecycle: `GET|POST /v1/policies/versions` ·
 `POST /v1/policies/{id}/replay|submit|approve|reject|activate|rollback`.
 Investigations: `GET|PATCH /v1/alerts/{id}/case`. Risk: `GET /v1/risk/{agent_id}`.
+Discovery: `GET /v1/discovery/findings` · `GET /v1/discovery/status` (sources, last and next scheduled scan) ·
+`POST /v1/discovery/scan` · `POST /v1/discovery/findings/{id}/claim|quarantine`.
 Measured traces: `GET /v1/traces?root_id=...` or `?trace_id=...`.
 
 ## Demonstrate the new features
@@ -507,7 +510,10 @@ files itself is updated by module id, tested against the fake OPA); Microsoft En
 Azure deployment are not built yet; Keycloak agent identities have been run
 only on a local single-node Keycloak (no clustering, TLS or secret manager). Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store and pending workflow state remain volatile;
-banking balances/receipts, governance and evidence records persist in PostgreSQL.
+banking balances/receipts, governance and evidence records persist in PostgreSQL. The scheduled identity-provider
+scan runs in every control-plane process and keeps its last-run status in memory; with several replicas each would
+scan (findings are de-duplicated) until a database leader lock is added. Telemetry, code-repository and cloud
+discovery sources are planned.
 
 ## Transparency: what was built when, and AI assistance
 

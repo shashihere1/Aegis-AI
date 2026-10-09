@@ -21,6 +21,8 @@ def startup_error(exc: BaseException) -> str:
         return "; ".join(startup_error(inner) for inner in exc.exceptions)
     return f"{type(exc).__name__}: {exc}"
 
+DEFAULT_DISCOVERY_SCAN_INTERVAL = 300  # the console scans the identity provider every 5 minutes unless configured
+
 
 class DemoServer:
     """ASGI wrapper that starts the in-process world on lifespan start-up and serves its routes."""
@@ -34,16 +36,20 @@ class DemoServer:
 
     async def _own(self, ready: asyncio.Future) -> None:
         try:
-            from_env = Settings.from_env().model_dump()
+            env = Settings.from_env()
+            from_env = env.model_dump()
             # A disposable demo ignores database and other settings, but identity settings (people's SSO and the
-            # agents' identity provider) and the policy engine choice still apply.
+            # agents' identity provider), the policy engine choice and the discovery schedule still apply.
             sign_in = {
                 k: v
                 for k, v in from_env.items()
                 if k.startswith(("oidc_", "builtin_oidc", "keycloak_", "opa_"))
-                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine", "person_links"}
+                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl", "policy_engine", "person_links",
+                         "discovery_scan_interval"}
             }
             overrides = sign_in if self.ephemeral else from_env
+            if "discovery_scan_interval" not in env.model_fields_set:
+                overrides["discovery_scan_interval"] = DEFAULT_DISCOVERY_SCAN_INTERVAL
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):
                 raise RuntimeError(
                     "Run deployment/local-postgres.ps1 first, or explicitly use --ephemeral for a disposable test demo"
