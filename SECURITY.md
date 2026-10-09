@@ -14,7 +14,16 @@ Aegis is a security control, so it is designed to fail closed:
 The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for Agentic Applications.
 
 ## Development-only components — never deploy as-is
-- **Dev IdP** (`/idp/login`) has no passwords. Replace with Keycloak or Microsoft Entra Agent ID.
+- **Dev IdP** (`/idp/login`) has no passwords. For any shared environment set `AEGIS_ENABLE_DEV_LOGIN=false` (login and
+  persona list return 403 and persona tokens are rejected) and configure an OpenID Connect provider (`AEGIS_OIDC_*`,
+  see the README). Agents' own identities still come from the dev IdP until a Keycloak/Entra provisioning adapter exists.
+- **Built-in OIDC provider** (`--sso`, `/oidc`) is for demos: one shared password, ephemeral signing keys, no MFA.
+  Never enable `AEGIS_BUILTIN_OIDC` outside a laptop.
+- **SSO checks:** only asymmetric algorithms are accepted (no `none`/HS256 key confusion), issuer, audience and expiry are
+  enforced, discovery must repeat the configured issuer, and unknown key IDs can trigger at most one key-set download per
+  30 seconds. Anyone the provider authenticates but who has no mapped role gets no operator access (roles come only from
+  the token). Browser tokens live in `sessionStorage` (gone when the tab closes), so a script injected into the console
+  could read them: keep the console's content-security policy strict when deploying.
 - **Local signing keys** persist in the protected `.local/keys` folder for the PostgreSQL console. Test keys are
   ephemeral. Neither approach is a production key store; use Azure Key Vault in a shared environment.
 - **Internal API token** (`AEGIS_INTERNAL_TOKEN`) protects Gateway → control-plane calls locally; use

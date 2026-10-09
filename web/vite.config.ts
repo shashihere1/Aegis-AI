@@ -4,7 +4,7 @@ import { defineConfig } from "vite";
 
 // The console is served by the demo server at /ui. In development, API calls are proxied to it.
 const backend = "http://127.0.0.1:8000";
-const proxied = ["/v1", "/idp", "/sts", "/gw", "/demo", "/.well-known"];
+const proxied = ["/v1", "/idp", "/oidc", "/sts", "/gw", "/demo", "/.well-known"];
 
 export default defineConfig({
   base: "/ui/",

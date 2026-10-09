@@ -27,6 +27,34 @@ class Settings(BaseModel):
 
     hotstore_url: str = ""  # "redis://..." for Valkey; empty -> in-memory (single process only)
 
+    # --- Sign-in for people (agents always authenticate with private_key_jwt through the IdP) ---
+    # The persona switcher (POST /idp/login) has no passwords. Turn it off everywhere except demos.
+    enable_dev_login: bool = True
+    # Standard OpenID Connect provider: Keycloak, Microsoft Entra ID, Okta, Auth0 ... Empty issuer = no SSO.
+    oidc_issuer: str = ""  # e.g. https://login.microsoftonline.com/<tenant>/v2.0 or http://host:8080/realms/aegis
+    oidc_client_id: str = ""  # the console's public (PKCE) client; also the default expected audience
+    oidc_audience: str = ""  # expected `aud` in the bearer token, if different from the client id
+    oidc_jwks_url: str = ""  # override the discovered jwks_uri (rarely needed)
+    oidc_algorithms: str = "RS256,ES256"
+    oidc_username_claim: str = "preferred_username"
+    oidc_name_claim: str = "name"
+    oidc_roles_claim: str = "roles"  # dotted path: Keycloak realm roles are "realm_access.roles"
+    oidc_entitlements_claim: str = "entitlements"
+    # JSON object mapping provider roles/groups to Aegis roles, e.g. {"Aegis.Approver": "risk-approver"}.
+    # Empty = provider roles are used as Aegis roles unchanged. Non-empty = only mapped roles are granted.
+    oidc_role_map: str = ""
+    oidc_scopes: str = "openid profile email"
+    oidc_clock_skew: int = 60
+    # Comma-separated callback URLs the console may use (built-in provider only; real providers hold their own).
+    oidc_redirect_uris: str = (
+        "http://127.0.0.1:8000/ui/auth/callback,http://localhost:8000/ui/auth/callback,"
+        "http://127.0.0.1:5173/ui/auth/callback,http://localhost:5173/ui/auth/callback"
+    )
+    # A small standards-compliant OIDC provider (authorization code + PKCE) at /oidc so SSO can be shown on a laptop
+    # with nothing installed. Demo only: one shared password, ephemeral keys.
+    builtin_oidc: bool = False
+    builtin_oidc_password: str = Field(default="", repr=False)
+
     mandate_default_ttl: int = 300
     max_delegation_depth: int = 3
     approval_ttl: int = 900

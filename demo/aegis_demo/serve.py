@@ -6,6 +6,8 @@ Run: python -m aegis_demo.serve
 import argparse
 import asyncio
 import logging
+import os
+import secrets
 
 import uvicorn
 
@@ -16,15 +18,21 @@ from aegis_demo.world import FAKE_LLM_URL, running_world
 class DemoServer:
     """ASGI wrapper that starts the in-process world on lifespan start-up and serves its routes."""
 
-    def __init__(self, ephemeral: bool = False) -> None:
+    def __init__(self, ephemeral: bool = False, sso_password: str = "") -> None:
         self.world = None
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self.ephemeral = ephemeral
+        self.sso_password = sso_password
 
     async def _own(self, ready: asyncio.Future) -> None:
         try:
-            overrides = {} if self.ephemeral else Settings.from_env().model_dump()
+            from_env = Settings.from_env().model_dump()
+            # A disposable demo ignores database and other settings, but sign-in (SSO) settings still apply.
+            sign_in = {
+                k: v for k, v in from_env.items() if k.startswith(("oidc_", "builtin_oidc")) or k == "enable_dev_login"
+            }
+            overrides = sign_in if self.ephemeral else from_env
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):
                 raise RuntimeError(
                     "Run deployment/local-postgres.ps1 first, or explicitly use --ephemeral for a disposable test demo"
@@ -32,6 +40,8 @@ class DemoServer:
             overrides.update(
                 control_url="http://127.0.0.1:8000", gateway_url="http://127.0.0.1:8000/gw", cache_seconds=0
             )
+            if self.sso_password:
+                overrides.update(builtin_oidc=True, builtin_oidc_password=self.sso_password)
             if not overrides.get("azure_openai_endpoint") and not overrides.get("llm_upstream_url"):
                 overrides["llm_upstream_url"] = FAKE_LLM_URL
             async with running_world(seed=1244, **overrides) as world:
@@ -65,7 +75,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Serve the Aegis demo (console at /ui, API docs at /docs).")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--ephemeral", action="store_true", help="Explicit disposable SQLite test mode")
+    parser.add_argument("--sso", action="store_true", help="Also run the built-in OpenID Connect provider (demo only)")
     args = parser.parse_args()
     port = args.port
+    sso_password = ""
+    if args.sso:
+        sso_password = os.environ.get("AEGIS_BUILTIN_OIDC_PASSWORD") or secrets.token_urlsafe(9)
+        print(f"Built-in SSO provider on. Sign in at the console with any demo account (e.g. sanne.bakker); "
+              f"password for this run: {sso_password}")
     print(f"Aegis console: http://127.0.0.1:{port}/ui/   ·   API docs: http://127.0.0.1:{port}/docs")
-    uvicorn.run(DemoServer(ephemeral=args.ephemeral), host="127.0.0.1", port=port, log_level="warning")
+    server = DemoServer(ephemeral=args.ephemeral, sso_password=sso_password)
+    uvicorn.run(server, host="127.0.0.1", port=port, log_level="warning")

@@ -237,6 +237,8 @@ def router() -> APIRouter:
     @r.post("/login")
     async def login(request: Request, body: LoginRequest):
         """Development login for demo personas (no password - never enable outside local/demo)."""
+        if not request.app.state.ctx.settings.enable_dev_login:
+            raise HTTPException(403, "development login is disabled; sign in with SSO")
         try:
             return {"access_token": request.app.state.ctx.idp.login(body.username), "token_type": "Bearer"}
         except PermissionError as exc:
@@ -245,6 +247,8 @@ def router() -> APIRouter:
     @r.get("/personas")
     async def personas(request: Request):
         """Demo personas for the console's role switcher (dev IdP only)."""
+        if not request.app.state.ctx.settings.enable_dev_login:
+            raise HTTPException(403, "development login is disabled; sign in with SSO")
         return [
             {"username": p.username, "name": p.name, "roles": p.roles, "status": p.status}
             for p in request.app.state.ctx.idp.personas.values()

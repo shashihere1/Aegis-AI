@@ -23,18 +23,22 @@ import { Tools } from "./pages/Tools";
 import { PoliciesPage } from "./pages/Policies";
 import { Evidence } from "./pages/Evidence";
 import { Studio } from "./pages/Studio";
+import { SignIn } from "./pages/SignIn";
+import { AuthCallback } from "./pages/AuthCallback";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 1000 } },
 });
 
 function Gate() {
-  const { ready } = useSession();
-  return ready ? <Layout /> : <Loading />;
+  const { ready, needsSignIn } = useSession();
+  if (!ready) return <Loading />;
+  return needsSignIn ? <SignIn /> : <Layout />;
 }
 
 const router = createBrowserRouter(
   [
+    { path: "auth/callback", element: <AuthCallback /> },
     {
       path: "/",
       element: <Gate />,

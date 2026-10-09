@@ -6,6 +6,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request
 
 from aegis.control.identity.idp import Persona
+from aegis.control.identity.oidc import IdentityUnavailable
 
 
 def _bearer(request: Request) -> str:
@@ -17,9 +18,11 @@ def _bearer(request: Request) -> str:
 
 async def current_user(request: Request) -> Persona:
     try:
-        return request.app.state.ctx.idp.verify_user_token(_bearer(request))
+        return await request.app.state.ctx.users.authenticate(_bearer(request))
     except jwt.InvalidTokenError as exc:
         raise HTTPException(401, f"invalid token: {exc}") from exc
+    except IdentityUnavailable as exc:
+        raise HTTPException(503, "the identity provider is unavailable") from exc
 
 
 def require_roles(*roles: str):

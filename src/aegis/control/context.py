@@ -10,6 +10,8 @@ from aegis.common.crypto import SigningKey
 from aegis.common.settings import REPO_ROOT, Settings
 from aegis.control.db import Database
 from aegis.control.identity.idp import DevIdp
+from aegis.control.identity.oidc import OidcVerifier
+from aegis.control.identity.users import UserAuthenticator
 from aegis.hotstore import HotStore
 
 
@@ -22,6 +24,9 @@ class ControlContext:
     hotstore: HotStore
     http: httpx.AsyncClient
     taxonomy: dict[str, list[str]]
+    users: UserAuthenticator | None = None  # who is this bearer token? (dev personas and/or OIDC)
+    oidc: OidcVerifier | None = None
+    builtin_oidc: Any = None  # the demo-only OIDC provider, when enabled
     telemetry: Any = None
 
     @property

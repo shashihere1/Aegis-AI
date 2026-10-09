@@ -26,6 +26,7 @@ from aegis.common.models import AgentStatus, data_class_rank
 from aegis.control import ledger
 from aegis.control.auth import require_roles
 from aegis.control.context import ControlContext, ctx, session
+from aegis.control.identity.oidc import IdentityUnavailable
 from aegis.control.tables import Agent, Approval, DecisionRecord, Mandate, Tool
 from aegis.hotstore import MemoryHotStore
 
@@ -124,9 +125,11 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
             parent = await s.get(Mandate, parent_claims["aegis"]["mandate_id"])
         else:
             try:
-                persona = c.idp.verify_user_token(subject_token)
+                persona = await c.users.authenticate(subject_token)
             except jwt.InvalidTokenError as exc:
                 raise StsError("invalid_grant", f"user token rejected: {exc}") from exc
+            except IdentityUnavailable as exc:
+                raise StsError("temporarily_unavailable", "the identity provider is unavailable") from exc
 
     if parent is not None:
         if parent.status != "active" or parent.expires_at.replace(tzinfo=UTC) <= now:

@@ -39,7 +39,8 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | SOC case assignments, notes, evidence links, validated statuses and append-only history | ✅ | `src/aegis/control/investigations.py` |
 | Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
 | React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
-| Regulatory-grade evidence packs, Copilot, Azure deployment, Keycloak/Entra adapters and managed OPA policy publishing | ⏳ remaining | — |
+| Sign-in for people through any OpenID Connect provider (Keycloak, Microsoft Entra ID, Okta...): authorization code + PKCE, signature/issuer/audience/expiry checks, provider roles mapped to Aegis roles; dev login can be switched off | ✅ (tested against a fake provider and a built-in one; not yet against a live Keycloak or Entra tenant) | `src/aegis/control/identity/oidc.py`, `users.py`, `web/src/lib/auth.ts` |
+| Regulatory-grade evidence packs, Copilot, Azure deployment, Entra Agent ID / Keycloak provisioning of *agent* identities and managed OPA policy publishing | ⏳ remaining | — |
 
 ## The console
 
@@ -108,6 +109,49 @@ The demo runs everything in one process: control plane, Gateway, seven mock-bank
 SDK), the KYC and Payments agents (A2A) and Ava, with synthetic data only. Personas log in through the dev IdP
 (`POST /idp/login {"username": "mark.jansen"}`); the persona list is in `demo/aegis_demo/catalog.py`.
 
+## Sign in with SSO (OpenID Connect)
+
+People sign in at an identity provider, never with a password typed into Aegis. The console runs the standard
+authorization-code flow with PKCE and sends the resulting access token as a bearer token; the control plane checks
+its signature against the provider's published keys (JWKS), its issuer, audience and expiry, then maps the provider's
+roles or groups to Aegis roles. Agents are separate: they keep authenticating with `private_key_jwt`.
+
+```powershell
+# Try it on a laptop, nothing to install: also starts a small built-in OIDC provider at /oidc (demo only)
+.venv\Scripts\python -m aegis_demo.serve --sso          # prints this run's password for the demo accounts
+# open http://127.0.0.1:8000/ui -> header menu -> "Sign in with SSO" -> e.g. sanne.bakker + the printed password
+```
+
+| Setting | Keycloak | Microsoft Entra ID |
+|---|---|---|
+| `AEGIS_OIDC_ISSUER` | `https://<host>/realms/<realm>` | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+| `AEGIS_OIDC_CLIENT_ID` | public client with PKCE (S256) | SPA app registration's client ID |
+| `AEGIS_OIDC_AUDIENCE` | client ID (default) or an audience mapper | `api://<client-id>` if you expose an API |
+| `AEGIS_OIDC_ROLES_CLAIM` | `realm_access.roles` | `roles` (app roles) |
+| `AEGIS_OIDC_ROLE_MAP` | `{"aegis-approver":"risk-approver", ...}` | `{"Aegis.Approver":"risk-approver", ...}` |
+
+Set `AEGIS_ENABLE_DEV_LOGIN=false` to turn the passwordless persona switcher off (its tokens are then rejected too);
+the Aegis roles to map are `OPERATORS` in `src/aegis/control/auth.py` (plus `customer`). Add the console's callback
+URL (`<console origin>/ui/auth/callback`) to the provider's redirect URIs. Details of what is and is not covered:
+[`SECURITY.md`](SECURITY.md).
+
+### Real Keycloak on a laptop (no Docker)
+
+Keycloak 26 runs from its zip with Java 21. On Infosys laptops the zip comes through Artifactory (Maven coordinates
+`org.keycloak:keycloak-quarkus-dist`, e.g. `.../artifactory/maven-remote/org/keycloak/keycloak-quarkus-dist/26.2.5/`);
+save it as `Downloads\keycloak\keycloak-quarkus-dist-26.2.5.zip`. `JAVA_HOME` must point to a Java 21 JDK.
+
+```powershell
+.venv\Scripts\python -m aegis_demo.keycloak_setup start     # unpacks to .local/keycloak, imports the `aegis` realm
+. .\.local\keycloak\aegis-env.ps1                            # sets AEGIS_OIDC_* for this PowerShell window
+.venv\Scripts\python -m aegis_demo.serve --ephemeral          # then: header menu -> Sign in with SSO
+.venv\Scripts\python -m aegis_demo.keycloak_setup stop        # also: status | env | reset
+```
+
+The realm is generated from the demo personas (same usernames and roles; every user shares one generated password,
+printed by `start` and kept in `.local/keycloak/credentials.json`, which is git-ignored). The `aegis-console` client
+is public with S256 PKCE and exact redirect URIs. Stop the built-in `--sso` server first if it is using port 8000.
+
 ## Architecture
 
 ```
@@ -123,7 +167,7 @@ scene-by-scene flow.
 
 | Concern | Local / tests | Azure deployment (planned) |
 |---|---|---|
-| Identity provider | Built-in dev IdP (no passwords — never expose) | Keycloak adapter / Microsoft Entra Agent ID adapter (not built yet) |
+| Identity provider | Built-in dev IdP (no passwords — never expose); optional built-in OIDC demo provider (`--sso`) | People: any OIDC provider (Keycloak, Entra ID...) through `AEGIS_OIDC_*`. Agent identities: Keycloak / Entra Agent ID provisioning adapter (not built yet) |
 | Policy engine | In-process Python engine implementing `config/policies/tool_call.rego` | OPA sidecar with the same Rego; `tests/test_policy.py` checks both agree when `opa` is installed |
 | Database | Persistent PostgreSQL for `serve`; SQLite only for tests/narration/explicit `--ephemeral` | Managed PostgreSQL, migration/backup/retention procedures still required |
 | Hot store | In-memory | Valkey (`ValkeyHotStore`, extra `valkey`) |
@@ -189,10 +233,10 @@ narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.tx
 
 ## Responsible AI, security and limitations
 
-See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords; the Python policy engine
+See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords (switch it off with `AEGIS_ENABLE_DEV_LOGIN=false`); SSO has been tested only against a fake provider and the built-in one, not a live Keycloak/Entra tenant; the Python policy engine
 must be kept in step with the Rego (conformance tests); scripted planners stand in for LLM planning in the
-demo; governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; Keycloak/Entra
-adapters, managed OPA publishing and Azure deployment are not built yet. Adaptive risk is an explainable
+demo; governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; agent-identity
+provisioning in Keycloak/Entra, managed OPA publishing and Azure deployment are not built yet. Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
 governance and evidence records now persist in PostgreSQL.
 

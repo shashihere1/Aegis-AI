@@ -15,6 +15,7 @@ import {
   GitFork,
   KeyRound,
   LayoutGrid,
+  LogOut,
   MonitorDot,
   Moon,
   Plug,
@@ -149,8 +150,9 @@ function Sidebar() {
 }
 
 function PersonaSwitcher() {
-  const { personas, persona, switchTo } = useSession();
+  const { personas, persona, source, config, switchTo, signIn, signOut } = useSession();
   const [open, setOpen] = useState(false);
+  const sso = source === "sso";
   return (
     <div className="relative">
       <button
@@ -158,14 +160,34 @@ function PersonaSwitcher() {
         className="flex h-10 items-center gap-2 rounded-xl border border-accent/40 bg-accent-soft px-3 text-sm font-medium text-accent"
         aria-haspopup="menu"
       >
-        <ShieldCheck className="size-4" />
+        {sso ? <KeyRound className="size-4" /> : <ShieldCheck className="size-4" />}
         {persona?.name ?? "Sign in"}
-        <span className="hidden text-xs text-muted xl:inline">· {persona?.roles[0]}</span>
+        <span className="hidden text-xs text-muted xl:inline">· {sso ? "SSO" : persona?.roles[0]}</span>
         <ChevronDown className="size-4" />
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-80 rounded-xl border border-line-strong bg-card p-1.5 shadow-2xl" role="menu" onMouseLeave={() => setOpen(false)}>
-          <div className="px-3 py-2 text-xs text-faint">Act as a demo persona (development IdP). Each role sees and can do different things.</div>
+        <div className="absolute right-0 z-30 mt-2 max-h-[80vh] w-80 overflow-y-auto rounded-xl border border-line-strong bg-card p-1.5 shadow-2xl" role="menu" onMouseLeave={() => setOpen(false)}>
+          {config?.oidc && !sso && (
+            <>
+              <button
+                role="menuitem"
+                onClick={() => void signIn(window.location.pathname.replace(/^\/ui/, "") || "/")}
+                className="flex w-full items-center gap-3 rounded-lg bg-accent-soft px-3 py-2.5 text-left text-sm font-medium text-accent hover:bg-hover"
+              >
+                <KeyRound className="size-4" /> Sign in with SSO
+              </button>
+              {personas.length > 0 && <div className="my-1 border-t border-line" />}
+            </>
+          )}
+          {sso && persona && (
+            <div className="px-3 py-2">
+              <div className="text-sm font-medium">{persona.name}</div>
+              <div className="text-xs text-muted">Signed in with SSO · {persona.roles.join(", ") || "no Aegis roles"}</div>
+            </div>
+          )}
+          {personas.length > 0 && (
+            <div className="px-3 py-2 text-xs text-faint">Act as a demo persona (development IdP). Each role sees and can do different things.</div>
+          )}
           {personas.map((p) => (
             <button
               key={p.username}
@@ -177,7 +199,7 @@ function PersonaSwitcher() {
               }}
               className={cx(
                 "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-hover disabled:opacity-40",
-                p.username === persona?.username && "bg-accent-soft",
+                !sso && p.username === persona?.username && "bg-accent-soft",
               )}
             >
               <Avatar name={p.name} size="sm" />
@@ -187,6 +209,12 @@ function PersonaSwitcher() {
               </div>
             </button>
           ))}
+          {sso && <div className="my-1 border-t border-line" />}
+          {sso && (
+            <button role="menuitem" onClick={signOut} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-hover">
+              <LogOut className="size-4 text-muted" /> Sign out
+            </button>
+          )}
         </div>
       )}
     </div>
