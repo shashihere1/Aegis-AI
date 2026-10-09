@@ -40,6 +40,7 @@ class ControlContext:
     llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     discovery_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     discovery_status: dict = field(default_factory=dict)  # last identity-provider scan; in memory, per process
+    execution_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # local bank commit vs kill-switch ordering
 
     @property
     def sts_issuer(self) -> str:

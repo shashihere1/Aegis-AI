@@ -69,3 +69,33 @@ async def test_budget_hold_denies_overspend_and_settlement_is_idempotent(world):
         row = await s.get(LlmReservation, first["reservation_id"])
         assert row.status == "settled" and row.charged_eur < row.reserved_eur
     assert (await reserve())["allowed"]
+
+
+async def test_budget_warning_is_once_and_budget_api_does_not_grant_customer_access(world):
+    from aegis.control.tables import Alert, BudgetNotice
+
+    settings = world.ctx.settings
+    settings.azure_openai_deployment = "offline"
+    settings.llm_processing_scope = settings.llm_allowed_processing_scope = "eu"
+    settings.llm_daily_budget_eur = 0.04
+    headers = world.internal_headers()
+    body = {
+        "agent_id": world.agent_ids["ava"],
+        "mandate_id": "offline",
+        "deployment": "offline",
+        "data_class": "confidential",
+        "input_bound_tokens": 13000,
+        "output_bound_tokens": 1,
+    }
+    first = (await world.http.post(f"{BASE}/internal/llm/reserve", json=body, headers=headers)).json()
+    assert first["allowed"]
+    smaller = {**body, "input_bound_tokens": 100}
+    assert (await world.http.post(f"{BASE}/internal/llm/reserve", json=smaller, headers=headers)).json()["allowed"]
+    async with world.ctx.db.sessionmaker() as s:
+        assert await s.scalar(select(func.count()).select_from(Alert).where(Alert.rule_id == "DET-16")) == 1
+        assert await s.scalar(select(func.count()).select_from(BudgetNotice)) == 1
+    assert (await world.api("jan.devries", "GET", "/v1/model-budgets")).status_code == 403
+    response = await world.api("mark.jansen", "GET", "/v1/model-budgets")
+    assert response.status_code == 200
+    budget = next(item for item in response.json()["items"] if item["agent_id"] == world.agent_ids["ava"])
+    assert budget["state"] == "warning" and budget["outstanding_holds"] == 2

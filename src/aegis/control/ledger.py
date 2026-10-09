@@ -21,12 +21,23 @@ def entry_hash(prev_hash: str, ts: str, event_type: str, actor: str, subject: st
     )
 
 
+async def lock_transaction(session: AsyncSession) -> None:
+    """Acquire the ledger transaction lock before any local execution mutex.
+
+    A SOC transaction can already hold this lock before invoking the kill switch.
+    Bank commits and suspension must use the same order to avoid a cross-lock deadlock.
+    PostgreSQL transaction advisory locks are re-entrant and released on commit/rollback.
+    """
+    if session.bind.dialect.name == "postgresql":
+        await session.execute(text("SELECT pg_advisory_xact_lock(724356912)"))
+
+
 async def append(session: AsyncSession, event_type: str, actor: str, subject: str, payload: dict) -> LedgerEntry:
     """Add an entry to the session; the caller commits it together with the change it records."""
     if session.bind.dialect.name == "postgresql":
         # A transaction can append twice before committing. Waiting on its database lock while
         # holding a process lock would prevent the first transaction from making that second append.
-        await session.execute(text("SELECT pg_advisory_xact_lock(724356912)"))
+        await lock_transaction(session)
         return await _append_entry(session, event_type, actor, subject, payload)
     async with _append_lock:
         return await _append_entry(session, event_type, actor, subject, payload)

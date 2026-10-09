@@ -48,6 +48,7 @@ from aegis_demo.bank_mcp import apps as bank_apps
 from aegis_demo.console_api import console_app
 from aegis_demo.copilot import interrupt_copilot_history
 from aegis_demo.data import DOCUMENTS
+from aegis_demo.walkthrough import runtime_app
 
 BASE = "http://127.0.0.1:8000"
 FAKE_LLM_URL = f"{BASE}/demo/fake-llm/v1"
@@ -110,6 +111,8 @@ class World:
     stop: asyncio.Event = field(default_factory=asyncio.Event)
     background: list[asyncio.Task] = field(default_factory=list)
     spawned: list[asyncio.Task] = field(default_factory=list)
+    runtime_pairs: dict = field(default_factory=dict)
+    live_runs: dict = field(default_factory=dict)
 
     def spawn(self, coro) -> asyncio.Task:
         """Run a background job (e.g. an agent waiting for an approval); cancelled when the world stops."""
@@ -167,8 +170,13 @@ async def bootstrap(w: World) -> None:
                 old = await s.get(McpServer, server_id)
                 if old and old.url == f"{BASE}/demo/mcp/{server_id}/mcp" and old.status == "active":
                     old.status = "retired"
-                    await ledger.append(s, "mcp.fixture_retired", "system:sandbox-migration", server_id,
-                                        {"reason": "Offline test fixture removed from normal application"})
+                    await ledger.append(
+                        s,
+                        "mcp.fixture_retired",
+                        "system:sandbox-migration",
+                        server_id,
+                        {"reason": "Offline test fixture removed from normal application"},
+                    )
             await s.commit()
         existing_servers = set((await s.scalars(select(McpServer.id))).all())
         existing_agents = {a.name: a for a in (await s.scalars(select(Agent))).all()}
@@ -343,8 +351,9 @@ async def seed_registry(w: World, count: int) -> None:
 
 
 @asynccontextmanager
-async def running_world(seed: int = 0, *, offline_fixtures: bool = False,
-                        agent_identity_factory=None, extra_routes=(), **overrides):
+async def running_world(
+    seed: int = 0, *, offline_fixtures: bool = False, agent_identity_factory=None, extra_routes=(), **overrides
+):
     """Boot the whole demo in one process.
 
     `agent_identity_factory(settings, http)` may supply the agents' identity provider and `extra_routes` adds more
@@ -392,7 +401,7 @@ async def running_world(seed: int = 0, *, offline_fixtures: bool = False,
         telemetry=control.state.ctx.telemetry,
         service_key=gateway_service_key,
     )
-    bank = None if offline_fixtures else Bank(control.state.ctx.db)
+    bank = None if offline_fixtures else Bank(control.state.ctx.db, control.state.ctx)
     if offline_fixtures:
         from aegis_demo.mcp_servers import SERVERS
 
@@ -408,6 +417,10 @@ async def running_world(seed: int = 0, *, offline_fixtures: bool = False,
         app.add_middleware(TraceMiddleware, telemetry=control.state.ctx.telemetry, service=f"aegis.agent.{name}")
     mounts = {name: Mount(f"/demo/mcp/{name}", app) for name, app in servers.items()}
     holder: dict = {}
+    managed_runtimes = runtime_app(lambda: holder["world"])
+    managed_runtimes.add_middleware(
+        TraceMiddleware, telemetry=control.state.ctx.telemetry, service="aegis.agent.managed-payments"
+    )
     fixture_routes = []
     if offline_fixtures:
         from aegis_demo.fake_llm import fake_llm_app
@@ -434,6 +447,7 @@ async def running_world(seed: int = 0, *, offline_fixtures: bool = False,
             *mounts.values(),
             Mount("/demo/agents/kyc", kyc_app),
             Mount("/demo/agents/payments", payments_app),
+            Mount("/demo/runtime", managed_runtimes),
             *fixture_routes,
             Mount("/demo/api", studio),
             *extra_routes,

@@ -15,8 +15,8 @@ from aegis.common.hashing import sha256_hex
 from aegis.common.ids import new_id
 from aegis.common.models import data_class_rank
 from aegis.control import ledger
-from aegis.control.auth import require_internal
-from aegis.control.tables import LlmReservation, Usage
+from aegis.control.auth import OPERATORS, require_internal, require_roles
+from aegis.control.tables import Agent, BudgetNotice, DecisionRecord, LlmReservation, Mandate, Usage
 
 
 def policy(settings) -> dict:
@@ -29,6 +29,8 @@ def policy(settings) -> dict:
         "daily_budget_eur": settings.llm_daily_budget_eur,
         "input_eur_per_1k": settings.llm_price_in_per_1k,
         "output_eur_per_1k": settings.llm_price_out_per_1k,
+        "budget_enforcement": "deny-before-provider",
+        "budget_warning_ratio": 0.8,
     }
 
 
@@ -63,13 +65,64 @@ async def budget_status(ctx, agent_id: str) -> dict:
                 LlmReservation.status == "reserved",
             )
         )
+        decisions = list(
+            await s.scalars(
+                select(DecisionRecord).where(
+                    DecisionRecord.agent_id == agent_id,
+                    DecisionRecord.action == "llm.chat",
+                    DecisionRecord.decision == "deny",
+                    DecisionRecord.ts >= datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0),
+                )
+            )
+        )
     return {
         "day_utc": today,
         "used_or_reserved_eur": round(total, 6),
         "outstanding_holds": holds,
         "remaining_estimate_eur": round(max(0, ctx.settings.llm_daily_budget_eur - total), 6),
+        "daily_budget_eur": ctx.settings.llm_daily_budget_eur,
+        "blocked_requests": sum(any(r.get("rule") == "LLM-BUDGET" for r in d.reasons) for d in decisions),
+        "state": "exhausted"
+        if total >= ctx.settings.llm_daily_budget_eur
+        else "warning"
+        if total >= 0.8 * ctx.settings.llm_daily_budget_eur
+        else "within_budget",
         "note": "Configured estimates, not Azure billing. Uncertain calls retain their holds.",
     }
+
+
+async def warn_budget(ctx, s, row):
+    """Budget lock is held by the caller; the warning and notice commit with the reservation/settlement."""
+    from aegis.control.soc import raise_alert
+
+    config = row.policy_snapshot
+    await s.flush()
+    total = await s.scalar(
+        select(func.coalesce(func.sum(LlmReservation.charged_eur), 0)).where(
+            LlmReservation.agent_id == row.agent_id, LlmReservation.day == row.day
+        )
+    )
+    notice_id = f"{row.agent_id}:{row.day}:{row.policy_version}"
+    if total < 0.8 * config["daily_budget_eur"] or await s.get(BudgetNotice, notice_id):
+        return
+    mandate = await s.get(Mandate, row.mandate_id)
+    alert = await raise_alert(
+        ctx,
+        s,
+        "DET-16",
+        "medium",
+        "Estimated model budget reached 80%",
+        row.agent_id,
+        {
+            "mandate_id": row.mandate_id,
+            "root_id": mandate.root_id if mandate else None,
+            "policy_version": row.policy_version,
+            "day_utc": row.day,
+            "used_or_reserved_eur": round(total, 6),
+            "daily_budget_eur": config["daily_budget_eur"],
+        },
+    )
+    s.add(BudgetNotice(id=notice_id, agent_id=row.agent_id, alert_id=alert.id))
 
 
 class Reserve(BaseModel):
@@ -91,9 +144,19 @@ class Settle(BaseModel):
 
 
 def router() -> APIRouter:
-    r = APIRouter(prefix="/internal/llm", dependencies=[Depends(require_internal)])
+    r = APIRouter()
 
-    @r.post("/reserve")
+    @r.get("/v1/model-budgets", dependencies=[Depends(require_roles(*OPERATORS))])
+    async def budgets(request: Request):
+        ctx = request.app.state.ctx
+        async with ctx.db.sessionmaker() as s:
+            agents = list(await s.scalars(select(Agent).order_by(Agent.name).limit(200)))
+        return {
+            "policy": policy(ctx.settings),
+            "items": [{"agent_id": a.id, "agent_name": a.name, **await budget_status(ctx, a.id)} for a in agents],
+        }
+
+    @r.post("/internal/llm/reserve", dependencies=[Depends(require_internal)])
     async def reserve(body: Reserve, request: Request):
         ctx = request.app.state.ctx
         settings = ctx.settings
@@ -136,6 +199,11 @@ def router() -> APIRouter:
                     "message": "Daily estimated agent budget exhausted.",
                     "policy_version": version,
                     "policy": snapshot,
+                    "budget": {
+                        "used_or_reserved_eur": round(used, 6),
+                        "daily_budget_eur": settings.llm_daily_budget_eur,
+                        "requested_estimate_eur": amount,
+                    },
                 }
             reservation = LlmReservation(
                 id=new_id("llm"),
@@ -149,6 +217,7 @@ def router() -> APIRouter:
                 policy_snapshot=snapshot,
             )
             s.add(reservation)
+            await warn_budget(ctx, s, reservation)
             await ledger.append(
                 s,
                 "llm.budget_reserved",
@@ -159,7 +228,7 @@ def router() -> APIRouter:
             await s.commit()
             return {"allowed": True, "reservation_id": reservation.id, "policy_version": version}
 
-    @r.post("/{reservation_id}/settle")
+    @r.post("/internal/llm/{reservation_id}/settle", dependencies=[Depends(require_internal)])
     async def settle(reservation_id: str, body: Settle, request: Request):
         ctx = request.app.state.ctx
         async with ctx.llm_budget_lock, ctx.db.sessionmaker() as s:
@@ -177,6 +246,7 @@ def router() -> APIRouter:
                 6,
             )
             row.status, row.charged_eur = "settled", cost
+            await warn_budget(ctx, s, row)
             s.add(
                 Usage(
                     agent_id=row.agent_id,

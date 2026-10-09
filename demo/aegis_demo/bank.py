@@ -16,6 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from aegis.common.ids import new_id
 from aegis.control import ledger
 from aegis.control.bank_tables import BankAccount, BankCustomer, BankDocument, BankEntry, BankOperation, BankPayment
+from aegis.control.tables import Agent, Mandate
 from aegis_demo.data import CUSTOMERS, DOCUMENTS, LANDLORD_IBAN
 
 SEED_CUSTOMERS = deepcopy(CUSTOMERS)
@@ -55,8 +56,9 @@ def money(value) -> Decimal:
 
 
 class Bank:
-    def __init__(self, db):
+    def __init__(self, db, control=None):
         self.db = db
+        self.control = control
         self._sqlite_lock = asyncio.Lock()
         dialect = db.engine.dialect.name
         if dialect not in {"postgresql", "sqlite"}:
@@ -64,13 +66,27 @@ class Bank:
         self.insert = pg_insert if dialect == "postgresql" else sqlite_insert
 
     @asynccontextmanager
-    async def write_lock(self):
+    async def write_lock(self, session=None):
+        if self.control:
+            # The one-process sandbox orders committed writes against suspension.
+            # This is not a claim that remote, already-committed operations can be undone.
+            await ledger.lock_transaction(session)
+            async with self.control.execution_lock:
+                yield
+                # Commit before releasing the execution mutex, not in the enclosing
+                # transaction context after it has released this mutex.
+                await session.commit()
+            return
         # SQLite is an offline test mode. PostgreSQL uses transactional unique keys and row locks.
         if self.db.engine.dialect.name == "sqlite":
             async with self._sqlite_lock:
                 yield
+                if session is not None:
+                    await session.commit()
         else:
             yield
+            if session is not None:
+                await session.commit()
 
     async def seed(self):
         """Insert missing synthetic records, never overwrite an existing balance/profile/document."""
@@ -161,7 +177,25 @@ class Bank:
             raise ValueError("A gateway-authorized task is required.")
         key = digest({"root": actor.root_id, "tool": tool})
         argument_hash = digest({"customer_id": customer_id, **arguments})
-        async with self.write_lock(), self.db.sessionmaker() as s, s.begin():
+        async with self.db.sessionmaker() as s, s.begin(), self.write_lock(s):
+            if self.control:
+                mandate = await s.get(Mandate, actor.mandate_id)
+                if (
+                    mandate is None
+                    or mandate.root_id != actor.root_id
+                    or mandate.agent_id != actor.agent_id
+                    or mandate.subject != actor.subject
+                    or mandate.status != "active"
+                    or mandate.expires_at.replace(tzinfo=UTC) <= datetime.now(UTC)
+                ):
+                    raise ValueError("The banking task is no longer active; no write was committed.")
+                revoked = await self.control.hotstore.revoked(
+                    [("mdt", mandate.id), ("root", mandate.root_id), ("jti", mandate.jti)]
+                    + [("agent", agent_id) for agent_id in mandate.chain]
+                )
+                agents = list(await s.scalars(select(Agent).where(Agent.id.in_(mandate.chain))))
+                if revoked or len(agents) != len(mandate.chain) or any(a.status != "active" for a in agents):
+                    raise ValueError("A suspended or revoked banking task cannot commit a write.")
             await self.owned(s, customer_id, actor.subject)
             inserted = await s.scalar(
                 self.insert(BankOperation)
