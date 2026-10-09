@@ -350,6 +350,9 @@ def report_html(pack: dict, signing: dict) -> str:
          ", ".join(m["files"]))
         for m in regulatory_mapping(pack)
     ]
+    regulation_table = _table(
+        ("Reference", "Expectation", "What Aegis recorded", "Records", "Files"), regulation_rows
+    )
     alert_rows = [(a["ts"], a["id"], a["rule_id"], a["severity"], a["title"]) for a in alerts]
     approval_rows = [(a["created_at"], a["id"], a["tool"], a["status"], a["approver"] or "—") for a in approvals]
     denial_rows = [(d["ts"], d["id"], d["action"], ", ".join(r.get("rule", "") for r in d["reasons"])) for d in denials]
@@ -384,7 +387,7 @@ checkpoint #{signing["checkpoint_id"]}</p></div>
 <h2>Regulatory mapping</h2>
 <p>Where the evidence for each expectation in the EU AI Act, DORA and GDPR sits in this pack. It shows what Aegis
 recorded; whether that satisfies an obligation is for your compliance function to judge.</p>
-<div class="scroll">{_table(("Reference", "Expectation", "What Aegis recorded", "Records", "Files"), regulation_rows)}</div>
+<div class="scroll">{regulation_table}</div>
 <h2>Recent security alerts</h2>
 <div class="scroll">{_table(("Time", "Alert ID", "Rule", "Severity", "Finding"), alert_rows)}</div>
 <h2>Recent human approvals</h2>
@@ -499,7 +502,9 @@ def router() -> APIRouter:
         latest = pack["records"]["checkpoints"][-1] if pack["records"]["checkpoints"] else None
         return {key: pack[key] for key in ("generated_at", "source", "period", "integrity", "counts")} | {
             "evidence_key": {"fingerprint": c.evidence_key.fingerprint, "mode": _key_mode(c)},
-            "latest_checkpoint": {k: latest[k] for k in ("id", "entries", "tip", "ts", "signed_by")} if latest else None,
+            "latest_checkpoint": (
+                {k: latest[k] for k in ("id", "entries", "tip", "ts", "signed_by")} if latest else None
+            ),
             "regulations": [
                 {k: m[k] for k in ("regulation", "reference", "expectation", "observed_records")}
                 for m in regulatory_mapping(pack)

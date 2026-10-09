@@ -165,8 +165,8 @@ def main(argv=None) -> int:
     who = "key pinned" if result["key_pinned"] else "key NOT pinned: compare it with /v1/evidence/key"
     print(f"VERIFIED: {result['files']} files, {result['entries']} ledger entries, tip {result['tip']}")
     print(f"  {signed}; evidence key {result['key']} ({who})")
-    print(f"  {result['checkpoints']} signed checkpoints match the chain"
-          + (f"; {result['checkpoints_other_key']} signed by an earlier key" if result["checkpoints_other_key"] else ""))
+    earlier = f"; {result['checkpoints_other_key']} signed by an earlier key" if result["checkpoints_other_key"] else ""
+    print(f"  {result['checkpoints']} signed checkpoints match the chain{earlier}")
     return 0
 
 
