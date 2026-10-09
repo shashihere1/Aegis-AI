@@ -13,6 +13,19 @@ Aegis is a security control, so it is designed to fail closed:
 
 The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for Agentic Applications.
 
+## Service and transport security
+- **No shared service secret.** The data plane (Gateway) authenticates to the control plane with a signed
+  ES256 assertion (`private_key_jwt`, RFC 7523), verified with the Gateway's public key — the same asymmetric
+  model agents use to sign in. There is no static header secret whose leak would let either side forge the other.
+- **Transport.** All inter-service and browser traffic runs over TLS; set `AEGIS_TLS_CERT_FILE` / `AEGIS_TLS_KEY_FILE`
+  for direct termination, or terminate at a reverse proxy / Azure Container Apps ingress. Upstream MCP servers and the
+  control plane are reachable only from the Gateway (internal ingress); data-plane ↔ control-plane uses mTLS in Azure.
+- **CORS.** The APIs send CORS headers only for the exact origins in `AEGIS_CORS_ORIGINS` (no wildcards). Set this to
+  the console's deployed URL; a cross-origin site cannot read API responses or send credentialed requests.
+- **CSRF.** Operator and agent calls authenticate by `Authorization: Bearer` only — never by cookie — so a forged
+  cross-site request carries no credential. Browser tokens live in `sessionStorage`, not cookies. Do not introduce
+  cookie-based sessions for state-changing endpoints without also adding `SameSite=Strict` and a CSRF token.
+
 ## Development-only components — never deploy as-is
 - **Dev IdP** (`/idp/login`) has no passwords. For any shared environment set `AEGIS_ENABLE_DEV_LOGIN=false` (login and
   persona list return 403 and persona tokens are rejected) and configure an OpenID Connect provider (`AEGIS_OIDC_*`,
@@ -42,8 +55,12 @@ The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for 
   could read them: keep the console's content-security policy strict when deploying.
 - **Local signing keys** persist in the protected `.local/keys` folder for the PostgreSQL console. Test keys are
   ephemeral. Neither approach is a production key store; use Azure Key Vault in a shared environment.
-- **Internal API token** (`AEGIS_INTERNAL_TOKEN`) protects Gateway → control-plane calls locally; use
-  workload identity (managed identity / mTLS) in Azure.
+- **Gateway → control-plane identity** is asymmetric, not a shared secret. The Gateway signs a short-lived
+  (60 s) ES256 assertion for each internal call with its own private key (`AEGIS_GATEWAY_SERVICE_KEY_PATH`;
+  a Key Vault reference in Azure); the control plane verifies it with the Gateway's public key only
+  (`AEGIS_GATEWAY_SERVICE_PUBLIC_KEY_PATH`), so it holds nothing that could forge a Gateway token. Locally
+  the pair is generated in-process. The control plane fails closed (503) if the public key is absent. In Azure,
+  pin this to the Gateway's workload identity (managed identity) and run data-plane ↔ control-plane over mTLS.
 - The demo returns an agent's private key once at approval, for the demo runtime. In production it is delivered
   to the agent's secret store, never to a person.
 

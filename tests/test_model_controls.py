@@ -41,7 +41,7 @@ async def test_budget_hold_denies_overspend_and_settlement_is_idempotent(world):
     settings.azure_openai_deployment = "offline"
     settings.llm_processing_scope = settings.llm_allowed_processing_scope = "eu"
     settings.llm_daily_budget_eur = 0.04
-    headers = {"x-aegis-internal": settings.internal_token}
+    headers = world.internal_headers()
     body = {
         "agent_id": world.agent_ids["ava"],
         "mandate_id": "offline-mandate",

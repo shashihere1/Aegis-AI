@@ -5,23 +5,29 @@ import time
 import httpx
 import jwt
 
+from aegis.common.crypto import SigningKey
+from aegis.common.service_identity import mint_service_token
 from aegis.telemetry import tracing_headers
 
 
 class ControlPlaneClient:
-    def __init__(self, http: httpx.AsyncClient, control_url: str, internal_token: str, cache_seconds: float):
+    def __init__(self, http: httpx.AsyncClient, control_url: str, service_key: SigningKey, cache_seconds: float):
         self.http = http
         self.base = control_url.rstrip("/")
-        self.headers = {"x-aegis-internal": internal_token}
+        self._service_key = service_key
         self.cache_seconds = cache_seconds
         self._cache: dict[str, tuple[float, object]] = {}
         self._sts_key = None
+
+    def _service_headers(self) -> dict:
+        # A fresh asymmetric assertion per call; the control plane verifies it with our public key only.
+        return {"x-aegis-internal": mint_service_token(self._service_key)}
 
     async def _get(self, path: str, cache: bool = True):
         hit = self._cache.get(path)
         if cache and hit and time.monotonic() - hit[0] < self.cache_seconds:
             return hit[1]
-        response = await self.http.get(f"{self.base}{path}", headers=tracing_headers(self.headers))
+        response = await self.http.get(f"{self.base}{path}", headers=tracing_headers(self._service_headers()))
         if response.status_code == 404:
             return None
         response.raise_for_status()
@@ -30,7 +36,9 @@ class ControlPlaneClient:
         return value
 
     async def _post(self, path: str, payload: dict) -> dict:
-        response = await self.http.post(f"{self.base}{path}", headers=tracing_headers(self.headers), json=payload)
+        response = await self.http.post(
+            f"{self.base}{path}", headers=tracing_headers(self._service_headers()), json=payload
+        )
         response.raise_for_status()
         return response.json()
 
