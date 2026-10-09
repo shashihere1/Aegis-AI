@@ -42,6 +42,7 @@ class OidcConfig:
     role_map: dict[str, list[str]] = field(default_factory=dict)
     scopes: str = "openid profile email"
     clock_skew: int = 60
+    one_role_per_account: bool = False
     builtin: bool = False
 
     @classmethod
@@ -71,6 +72,7 @@ class OidcConfig:
             role_map=role_map,
             scopes=s.oidc_scopes,
             clock_skew=s.oidc_clock_skew,
+            one_role_per_account=s.oidc_one_role_per_account,
             builtin=s.builtin_oidc and not s.oidc_issuer.strip(),
         )
 
@@ -189,10 +191,17 @@ class OidcVerifier:
     def persona_from(self, claims: dict) -> Persona:
         cfg = self.config
         username = claim_path(claims, cfg.username_claim) or claims.get("email") or claims["sub"]
+        roles = self.roles_from(claims)
+        if cfg.one_role_per_account and len(roles) > 1:
+            # One identity per duty: the roles a login holds can never be combined into a conflict.
+            raise jwt.InvalidTokenError(
+                f"account {username} holds {len(roles)} Aegis roles ({', '.join(sorted(roles))}); "
+                "sign in with a separate account for each role"
+            )
         return Persona(
             username=str(username),
             name=str(claim_path(claims, cfg.name_claim) or username),
-            roles=self.roles_from(claims),
+            roles=roles,
             entitlements=as_list(claim_path(claims, cfg.entitlements_claim)),
         )
 

@@ -33,6 +33,7 @@ interface Pending {
 
 const TOKEN_KEY = "aegis.sso.token";
 const PENDING_KEY = "aegis.sso.pending";
+const THEN_KEY = "aegis.sso.then"; // "sign in again right after the provider session has ended"
 
 // sessionStorage: the token disappears when the tab closes, and is not shared with other tabs.
 function read<T>(key: string): T | null {
@@ -137,17 +138,37 @@ async function exchange(config: SsoConfig, search: string): Promise<string> {
   return pending.return_to;
 }
 
-/** Forget the token and, when the provider supports it, end its session too. */
-export function signOut(config: SsoConfig | null) {
-  const idToken = read<StoredToken>(TOKEN_KEY)?.id_token;
+/** Where to land after the provider has ended its session (must be a registered post-logout URI). */
+const homeUrl = () => `${window.location.origin}${import.meta.env.BASE_URL}`;
+
+/**
+ * Forget the token and end the provider's own session too. Without that the provider keeps its login cookie and
+ * would silently sign the next "Sign in" straight back in as the same account, so you could never change role.
+ *
+ * With `signInAfter`, the console signs in again as soon as the provider has sent the browser back (see
+ * takePendingSignIn), which is how "Switch account" works.
+ */
+export function signOut(config: SsoConfig | null, signInAfter?: { returnTo: string }) {
+  const stored = read<StoredToken>(TOKEN_KEY);
   clearSsoToken();
-  const home = `${window.location.origin}${import.meta.env.BASE_URL}`;
-  if (config?.end_session_endpoint) {
-    const url = new URL(config.end_session_endpoint);
-    url.searchParams.set("post_logout_redirect_uri", home);
-    if (idToken) url.searchParams.set("id_token_hint", idToken);
-    window.location.assign(url.toString());
-  } else {
-    window.location.assign(home);
+  if (signInAfter) write(THEN_KEY, { return_to: signInAfter.returnTo });
+  if (!config?.end_session_endpoint) {
+    // A provider without logout support: the best we can do is to sign in again (or just go home).
+    if (signInAfter && config) void startSignIn(config, signInAfter.returnTo);
+    else window.location.assign(homeUrl());
+    return;
   }
+  const url = new URL(config.end_session_endpoint);
+  url.searchParams.set("client_id", config.client_id);
+  url.searchParams.set("post_logout_redirect_uri", homeUrl());
+  // Only a still-valid ID token is offered as a hint; with none, the provider asks the person to confirm the logout.
+  if (stored?.id_token && stored.expires_at > Date.now()) url.searchParams.set("id_token_hint", stored.id_token);
+  window.location.assign(url.toString());
+}
+
+/** After the provider's logout redirect: was a fresh sign-in requested? Returns the page to go back to, once. */
+export function takePendingSignIn(): string | null {
+  const pending = read<{ return_to: string }>(THEN_KEY);
+  write(THEN_KEY, null);
+  return pending ? pending.return_to : null;
 }

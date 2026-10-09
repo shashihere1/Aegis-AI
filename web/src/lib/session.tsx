@@ -1,7 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, setRelogin, setToken } from "./api";
-import { clearSsoToken, completeSignIn, signOut as endSession, startSignIn, storedSsoToken, type AuthConfig } from "./auth";
+import {
+  clearSsoToken,
+  completeSignIn,
+  signOut as endSession,
+  startSignIn,
+  storedSsoToken,
+  takePendingSignIn,
+  type AuthConfig,
+} from "./auth";
 import type { Persona } from "./types";
 
 // Two ways in. Real SSO (any OpenID Connect provider) shows who you really are. The development persona switcher
@@ -47,38 +55,49 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const configRef = useRef<AuthConfig | null>(null); // lets the callbacks below stay stable once config loads
+  const ssoUserRef = useRef<Persona | null>(null);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [username, setUsername] = useState<string>(stored());
-  const [ssoUser, setSsoUser] = useState<Persona | null>(null);
+  const [ssoUser, setSsoUserState] = useState<Persona | null>(null);
+  const setSsoUser = useCallback((user: Persona | null) => {
+    ssoUserRef.current = user;
+    setSsoUserState(user);
+  }, []);
   const [ready, setReady] = useState(false);
   const [needsSignIn, setNeedsSignIn] = useState(false);
 
-  const signIn = useCallback(
-    async (returnTo = "/") => {
-      if (configRef.current?.oidc) await startSignIn(configRef.current.oidc, returnTo);
-    },
-    [],
-  );
+  // A person choosing "Sign in with SSO" or "Switch account" wants to pick the account, so the provider's own login
+  // session is ended first; otherwise it would silently sign them straight back in as the previous account.
+  const signIn = useCallback(async (returnTo = "/") => {
+    if (!configRef.current?.oidc) return;
+    setSsoUser(null);
+    setToken(null);
+    endSession(configRef.current.oidc, { returnTo });
+  }, []);
 
-  // After an SSO token is rejected (expired, provider keys rotated) the only way forward is to sign in again.
+  // After an SSO token is rejected (expired, provider keys rotated) the way forward is a silent re-sign-in: the
+  // provider session, if it is still alive, renews the token without asking again.
   const resignIn = useCallback(() => {
     clearSsoToken();
-    void signIn(window.location.pathname.replace(import.meta.env.BASE_URL.replace(/\/$/, ""), "") || "/");
+    const here = window.location.pathname.replace(import.meta.env.BASE_URL.replace(/\/$/, ""), "") || "/";
+    if (configRef.current?.oidc) void startSignIn(configRef.current.oidc, here);
     return new Promise<string>(() => {}); // the page is navigating away
-  }, [signIn]);
+  }, []);
 
   const adoptSsoToken = useCallback(
-    async (accessToken: string): Promise<boolean> => {
+    /** Resolves to null when the server accepts the token, otherwise to the server's reason for refusing it. */
+    async (accessToken: string): Promise<string | null> => {
       setToken(accessToken);
       try {
         const me = await api<Omit<Persona, "status">>("/v1/auth/me");
         setSsoUser({ ...me, status: "active" });
         setRelogin(resignIn);
-        return true;
-      } catch {
+        return null;
+      } catch (error) {
         setToken(null);
         clearSsoToken();
-        return false;
+        const reason = error instanceof Error ? error.message : "";
+        return reason.replace(/^invalid token: /, "") || "The server did not accept the new token.";
       }
     },
     [resignIn],
@@ -86,6 +105,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const switchTo = useCallback(
     async (next: string) => {
+      if (ssoUserRef.current && configRef.current?.oidc) {
+        // Leaving an SSO identity: remember the persona, then end the provider session so a later "Sign in with SSO"
+        // does not silently log back in as the account being left. The page reloads as the chosen persona.
+        try {
+          localStorage.setItem(STORAGE_KEY, next);
+        } catch {
+          /* storage unavailable: the persona choice will not persist */
+        }
+        setSsoUser(null);
+        setToken(null);
+        endSession(configRef.current.oidc);
+        return;
+      }
       clearSsoToken();
       setSsoUser(null);
       await queryClient.cancelQueries();
@@ -113,8 +145,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       configRef.current = found;
       setConfig(found);
       if (onCallback()) return; // the callback page finishes the sign-in itself
+      const again = takePendingSignIn();
+      if (again !== null && found.oidc) {
+        await startSignIn(found.oidc, again); // the provider session has ended: this shows a fresh login form
+        return;
+      }
       const token = storedSsoToken();
-      if (token && (await adoptSsoToken(token.access_token))) {
+      if (token && (await adoptSsoToken(token.access_token)) === null) {
         setReady(true);
         return;
       }
@@ -152,7 +189,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!config?.oidc) throw new Error("SSO is not configured on this server.");
       const returnTo = await completeSignIn(config.oidc, search);
       const token = storedSsoToken();
-      if (!token || !(await adoptSsoToken(token.access_token))) throw new Error("The server did not accept the new token.");
+      const problem = token ? await adoptSsoToken(token.access_token) : "The sign-in did not return a token.";
+      if (problem) throw new Error(problem);
       setNeedsSignIn(false);
       setReady(true);
       await queryClient.cancelQueries();

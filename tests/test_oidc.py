@@ -129,6 +129,35 @@ async def test_entra_style_claims_pass_roles_through_and_accept_an_audience_list
     assert persona.roles == ["risk-approver", "auditor"] and persona.entitlements == ["own_accounts.read"]
 
 
+async def test_one_role_per_account_refuses_logins_that_hold_several_roles(provider):
+    two = provider.token(realm_access={"roles": ["aegis-approver", "aegis-soc", "offline_access"]})
+    mapping = json.dumps({"aegis-approver": "risk-approver", "aegis-soc": "soc-analyst"})
+    strict = verifier(provider, oidc_role_map=mapping, oidc_one_role_per_account=True)
+    with pytest.raises(jwt.InvalidTokenError, match="sign in with a separate account for each role") as refused:
+        await strict.authenticate(two)
+    assert "risk-approver" in str(refused.value) and "soc-analyst" in str(refused.value)
+    # one role (extra provider roles that map to nothing do not count), or none at all, is fine
+    assert (await strict.authenticate(provider.token())).roles == ["risk-approver"]
+    nothing = await strict.authenticate(provider.token(realm_access={"roles": ["offline_access"]}))
+    assert nothing.roles == []  # signed in, but entitled to nothing
+    # the same token is accepted when the rule is off (the default), so existing setups keep working
+    relaxed = verifier(provider, oidc_role_map=mapping)
+    assert (await relaxed.authenticate(two)).roles == ["risk-approver", "soc-analyst"]
+    # two provider roles that map to the same Aegis role are still one role
+    same = json.dumps({"a": "auditor", "b": "auditor"})
+    merged = verifier(provider, oidc_role_map=same, oidc_one_role_per_account=True)
+    assert (await merged.authenticate(provider.token(realm_access={"roles": ["a", "b"]}))).roles == ["auditor"]
+
+
+async def test_the_rule_also_guards_the_token_exchange_path(provider):
+    idp = DevIdp("http://control.test/idp", SigningKey.load_or_generate("", "idp-1"))
+    mapping = json.dumps({"aegis-approver": "risk-approver", "aegis-soc": "soc-analyst"})
+    cfg = settings(oidc_role_map=mapping, oidc_one_role_per_account=True)
+    users = UserAuthenticator(idp, cfg, OidcVerifier(OidcConfig.from_settings(cfg), provider.client()))
+    with pytest.raises(jwt.InvalidTokenError):
+        await users.authenticate(provider.token(realm_access={"roles": ["aegis-approver", "aegis-soc"]}))
+
+
 async def test_username_falls_back_to_email_then_subject(provider):
     v = verifier(provider)
     assert (await v.authenticate(provider.token(preferred_username=None, email="a@b.test"))).username == "a@b.test"
@@ -403,3 +432,19 @@ async def test_turning_dev_login_off_leaves_only_sso(sso):
     tokens = (await exchange(sso, code_from(await login(sso, challenge)), verifier_)).json()
     me = await sso.http.get(f"{BASE}/v1/auth/me", headers={"authorization": f"Bearer {tokens['access_token']}"})
     assert me.status_code == 200
+
+
+async def test_the_built_in_provider_accepts_the_consoles_logout_request(sso):
+    home = "http://127.0.0.1:8000/ui/"
+    ok = await sso.http.get(
+        f"{BASE}/oidc/logout",
+        params={"client_id": CLIENT, "post_logout_redirect_uri": home, "id_token_hint": "any.token.here"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 302 and ok.headers["location"] == home
+    elsewhere = await sso.http.get(
+        f"{BASE}/oidc/logout",
+        params={"client_id": CLIENT, "post_logout_redirect_uri": "https://evil.example/x"},
+        follow_redirects=False,
+    )
+    assert elsewhere.status_code == 200 and "location" not in elsewhere.headers  # never an open redirect

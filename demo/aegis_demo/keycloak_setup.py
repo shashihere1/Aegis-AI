@@ -1,7 +1,8 @@
 """Run a local Keycloak for Aegis sign-in: unpack the distribution, import an `aegis` realm, start/stop it.
 
     python -m aegis_demo.keycloak_setup start      # first run unpacks the zip and imports the realm
-    python -m aegis_demo.keycloak_setup status | stop | env | reset | ensure-control-plane | clean-agents
+    python -m aegis_demo.keycloak_setup status | stop | env | reset | accounts | clean-agents
+    python -m aegis_demo.keycloak_setup ensure-control-plane | ensure-role-identities    (upgrade a running realm)
 
 The realm is generated from the demo personas (`catalog.PERSONAS`), so Keycloak users, roles and the Aegis role map
 cannot drift apart. Passwords are generated on first start and kept in `.local/keycloak/credentials.json`
@@ -60,24 +61,49 @@ def role_map() -> dict[str, str]:
     return {f"{KEYCLOAK_ROLE_PREFIX}{role}": role for role in STAFF_ROLES}
 
 
-def build_realm(demo_password: str, origins: tuple[str, ...] = DEFAULT_ORIGINS) -> dict:
-    users = []
+def role_identities() -> list[dict]:
+    """One Keycloak account per Aegis role. A person who acts in several roles gets one account for each, so no
+    login ever holds two roles (for example `priya.raman` registers agents, `priya.raman.policy-author` drafts policy).
+    The first role keeps the person's own username; further roles are `<username>.<role>`.
+    """
+    identities = []
     for username, name, roles, _entitlements in PERSONAS:
         if roles == ["customer"]:
             continue
         first, _, last = name.partition(" ")
-        users.append(
-            {
-                "username": username,
-                "email": f"{username}@aegis.example",
-                "emailVerified": True,
-                "enabled": True,
-                "firstName": first,
-                "lastName": last or first,
-                "credentials": [{"type": "password", "value": demo_password, "temporary": False}],
-                "realmRoles": [f"{KEYCLOAK_ROLE_PREFIX}{r}" for r in roles],
-            }
-        )
+        last = last or first
+        for index, role in enumerate(roles):
+            identities.append(
+                {
+                    "username": username if index == 0 else f"{username}.{role}",
+                    "first": first,
+                    "last": last
+                    if index == 0
+                    else f"{last} - {role.replace('-', ' ')}",  # Keycloak names forbid ( ) and similar
+                    "role": role,
+                    "person": name,
+                }
+            )
+    return identities
+
+
+def user_representation(identity: dict, password: str) -> dict:
+    return {
+        "username": identity["username"],
+        "email": f"{identity['username']}@aegis.example",
+        "emailVerified": True,
+        "enabled": True,
+        "firstName": identity["first"],
+        "lastName": identity["last"],
+        "credentials": [{"type": "password", "value": password, "temporary": False}],
+    }
+
+
+def build_realm(demo_password: str, origins: tuple[str, ...] = DEFAULT_ORIGINS) -> dict:
+    users = [
+        {**user_representation(i, demo_password), "realmRoles": [f"{KEYCLOAK_ROLE_PREFIX}{i['role']}"]}
+        for i in role_identities()
+    ]
     return {
         "realm": REALM,
         "displayName": "Aegis AI",
@@ -209,6 +235,7 @@ def start(zip_path: Path, origins: tuple[str, ...]) -> None:
     if ready():
         print(f"Keycloak is already running: {ISSUER}")
         ensure_control_plane()  # upgrades a realm created before agent identities existed
+        ensure_role_identities()  # ... and before every role had its own account
         return
     java_home = java_ok()
     unpack(zip_path)
@@ -247,6 +274,7 @@ def start(zip_path: Path, origins: tuple[str, ...]) -> None:
         tail = "\n".join((HOME / "kc.log").read_text("utf-8", "replace").splitlines()[-15:])
         raise SystemExit(f"Keycloak did not become ready. Last log lines:\n{tail}")
     ensure_control_plane()
+    ensure_role_identities()
     print_summary(secrets_)
 
 
@@ -307,6 +335,58 @@ def ensure_control_plane() -> None:
     print(f"Control-plane client ready: {CONTROL_PLANE_CLIENT} (roles: {', '.join(CONTROL_PLANE_ROLES)})")
 
 
+def checked(reply: httpx.Response, what: str) -> httpx.Response:
+    """Fail with Keycloak's own explanation instead of a bare status code."""
+    if reply.is_error:
+        raise SystemExit(f"Keycloak refused to {what} (HTTP {reply.status_code}): {reply.text[:300]}")
+    return reply
+
+
+def ensure_role_identities() -> dict[str, list[str]]:
+    """Make the running realm match `role_identities()`: create missing accounts and give every account exactly its one
+    Aegis role (removing any extra). Only `aegis-*` roles are touched. Safe to run any number of times."""
+    http = admin_session()
+    password = credentials()["demo_password"]
+    realm_roles = {r["name"]: r for r in http.get("/roles", params={"max": 500}).json()}
+    report: dict[str, list[str]] = {"created": [], "fixed": [], "unchanged": []}
+    for identity in role_identities():
+        wanted = f"{KEYCLOAK_ROLE_PREFIX}{identity['role']}"
+        if wanted not in realm_roles:
+            raise SystemExit(f"The realm has no role {wanted!r}; recreate it with `reset` then `start`.")
+        found = http.get("/users", params={"username": identity["username"], "exact": "true"}).json()
+        created = not found
+        if created:
+            reply = checked(
+                http.post("/users", json=user_representation(identity, password)), f"create {identity['username']}"
+            )
+            user_id = reply.headers["location"].rsplit("/", 1)[1]
+        else:
+            user_id = found[0]["id"]
+        held = http.get(f"/users/{user_id}/role-mappings/realm").json()
+        ours = [r for r in held if r["name"].startswith(KEYCLOAK_ROLE_PREFIX)]
+        extra = [r for r in ours if r["name"] != wanted]
+        missing = [] if any(r["name"] == wanted for r in ours) else [realm_roles[wanted]]
+        if missing:
+            checked(http.post(f"/users/{user_id}/role-mappings/realm", json=missing), f"grant {wanted}")
+        if extra:
+            checked(http.request("DELETE", f"/users/{user_id}/role-mappings/realm", json=extra), "remove extra roles")
+        report["created" if created else "fixed" if (missing or extra) else "unchanged"].append(identity["username"])
+    print(
+        f"Role accounts ready: {len(report['created'])} created, {len(report['fixed'])} corrected, "
+        f"{len(report['unchanged'])} already correct (one account per role, {len(role_identities())} in total)."
+    )
+    return report
+
+
+def print_accounts() -> None:
+    """The directory of role accounts (no passwords)."""
+    rows = role_identities()
+    width = max(len(r["username"]) for r in rows)
+    print(f"{'username'.ljust(width)}  {'Aegis role'.ljust(18)}  person")
+    for r in rows:
+        print(f"{r['username'].ljust(width)}  {r['role'].ljust(18)}  {r['person']}")
+
+
 def clean_agents() -> None:
     """Delete every machine identity in the realm except the control plane's: agent identities left over from
     earlier demo runs, and unmanaged ones created by the shadow-agent scene."""
@@ -345,6 +425,7 @@ def write_env() -> Path:
         f"$env:AEGIS_OIDC_CLIENT_ID = '{CLIENT_ID}'",
         "$env:AEGIS_OIDC_ROLES_CLAIM = 'realm_access.roles'",
         f"$env:AEGIS_OIDC_ROLE_MAP = '{json.dumps(role_map())}'",
+        "$env:AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT = 'true'   # refuse a login that holds more than one Aegis role",
         "$env:AEGIS_ENABLE_DEV_LOGIN = 'true'   # set to 'false' to leave Keycloak as the only way in",
     ]
     agents = [
@@ -365,7 +446,18 @@ def write_env() -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local Keycloak for Aegis SSO")
     parser.add_argument(
-        "action", choices=["start", "stop", "status", "env", "reset", "ensure-control-plane", "clean-agents"]
+        "action",
+        choices=[
+            "start",
+            "stop",
+            "status",
+            "env",
+            "reset",
+            "ensure-control-plane",
+            "ensure-role-identities",
+            "accounts",
+            "clean-agents",
+        ],
     )
     parser.add_argument("--zip", type=Path, default=DEFAULT_ZIP, help="Keycloak server zip")
     parser.add_argument(
@@ -382,6 +474,10 @@ def main() -> None:
     elif args.action == "ensure-control-plane":
         ensure_control_plane()
         print(f"Settings written to {write_env()}")
+    elif args.action == "ensure-role-identities":
+        ensure_role_identities()
+    elif args.action == "accounts":
+        print_accounts()
     elif args.action == "clean-agents":
         clean_agents()
     elif args.action == "stop":
