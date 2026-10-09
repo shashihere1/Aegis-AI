@@ -1,7 +1,7 @@
 """Run a local Keycloak for Aegis sign-in: unpack the distribution, import an `aegis` realm, start/stop it.
 
     python -m aegis_demo.keycloak_setup start      # first run unpacks the zip and imports the realm
-    python -m aegis_demo.keycloak_setup status | stop | env | reset
+    python -m aegis_demo.keycloak_setup status | stop | env | reset | ensure-control-plane | clean-agents
 
 The realm is generated from the demo personas (`catalog.PERSONAS`), so Keycloak users, roles and the Aegis role map
 cannot drift apart. Passwords are generated on first start and kept in `.local/keycloak/credentials.json`
@@ -23,6 +23,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+import httpx
+
 from aegis.common.settings import REPO_ROOT
 from aegis_demo.catalog import PERSONAS
 
@@ -35,6 +37,9 @@ DEFAULT_ZIP = Path.home() / "Downloads" / "keycloak" / f"keycloak-quarkus-dist-{
 DEFAULT_ORIGINS = ("http://127.0.0.1:8000", "http://localhost:8000", "http://127.0.0.1:5173", "http://localhost:5173")
 ISSUER = f"http://127.0.0.1:{PORT}/realms/{REALM}"
 KEYCLOAK_ROLE_PREFIX = "aegis-"
+CONTROL_PLANE_CLIENT = "aegis-control-plane"
+# What Aegis may do in the realm to manage agent identities, and nothing else.
+CONTROL_PLANE_ROLES = ("manage-clients", "view-clients", "query-clients")
 
 # Aegis role -> description (the roles the control plane checks; `customer` is a bank customer, not staff).
 STAFF_ROLES = {
@@ -127,11 +132,15 @@ def build_realm(demo_password: str, origins: tuple[str, ...] = DEFAULT_ORIGINS) 
 
 def credentials() -> dict[str, str]:
     path = HOME / "credentials.json"
-    if path.exists():
-        return json.loads(path.read_text("utf-8"))
-    found = {"demo_password": secrets.token_urlsafe(12), "admin_password": secrets.token_urlsafe(16)}
-    HOME.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(found), encoding="utf-8")
+    found = json.loads(path.read_text("utf-8")) if path.exists() else {}
+    changed = False
+    for key, size in (("demo_password", 12), ("admin_password", 16), ("control_plane_secret", 24)):
+        if key not in found:
+            found[key] = secrets.token_urlsafe(size)
+            changed = True
+    if changed:
+        HOME.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(found), encoding="utf-8")
     return found
 
 
@@ -199,6 +208,7 @@ def stop() -> None:
 def start(zip_path: Path, origins: tuple[str, ...]) -> None:
     if ready():
         print(f"Keycloak is already running: {ISSUER}")
+        ensure_control_plane()  # upgrades a realm created before agent identities existed
         return
     java_home = java_ok()
     unpack(zip_path)
@@ -236,7 +246,84 @@ def start(zip_path: Path, origins: tuple[str, ...]) -> None:
     if not ready(timeout=180):
         tail = "\n".join((HOME / "kc.log").read_text("utf-8", "replace").splitlines()[-15:])
         raise SystemExit(f"Keycloak did not become ready. Last log lines:\n{tail}")
+    ensure_control_plane()
     print_summary(secrets_)
+
+
+def admin_session() -> httpx.Client:
+    """Keycloak's bootstrap admin, used only by this local setup tool. Aegis itself never holds this login."""
+    reply = httpx.post(
+        f"http://127.0.0.1:{PORT}/realms/master/protocol/openid-connect/token",
+        data={
+            "grant_type": "password",
+            "client_id": "admin-cli",
+            "username": "admin",
+            "password": credentials()["admin_password"],
+        },
+        timeout=20,
+        trust_env=False,
+    )
+    if reply.status_code != 200:
+        raise SystemExit(f"Could not sign in to Keycloak as its admin (HTTP {reply.status_code}). Was it reset?")
+    return httpx.Client(
+        base_url=f"http://127.0.0.1:{PORT}/admin/realms/{REALM}",
+        headers={"authorization": f"Bearer {reply.json()['access_token']}"},
+        timeout=20,
+        trust_env=False,
+    )
+
+
+def ensure_control_plane() -> None:
+    """Create (or repair) the client Aegis uses to manage agent identities: a service account that can manage
+    clients in the aegis realm and nothing more. Safe to run any number of times."""
+    http = admin_session()
+    representation = {
+        "clientId": CONTROL_PLANE_CLIENT,
+        "name": "Aegis control plane",
+        "description": "Creates, disables and lists AI agent identities for Aegis AI",
+        "enabled": True,
+        "protocol": "openid-connect",
+        "publicClient": False,
+        "clientAuthenticatorType": "client-secret",
+        "secret": credentials()["control_plane_secret"],
+        "serviceAccountsEnabled": True,
+        "standardFlowEnabled": False,
+        "implicitFlowEnabled": False,
+        "directAccessGrantsEnabled": False,
+    }
+    found = http.get("/clients", params={"clientId": CONTROL_PLANE_CLIENT}).json()
+    if found:
+        http.put(f"/clients/{found[0]['id']}", json=representation).raise_for_status()
+        client_uuid = found[0]["id"]
+    else:
+        http.post("/clients", json=representation).raise_for_status()
+        client_uuid = http.get("/clients", params={"clientId": CONTROL_PLANE_CLIENT}).json()[0]["id"]
+    account = http.get(f"/clients/{client_uuid}/service-account-user").json()
+    management = http.get("/clients", params={"clientId": "realm-management"}).json()[0]["id"]
+    roles = [r for r in http.get(f"/clients/{management}/roles").json() if r["name"] in CONTROL_PLANE_ROLES]
+    if len(roles) != len(CONTROL_PLANE_ROLES):
+        raise SystemExit("Keycloak's realm-management roles were not found; is this the aegis realm?")
+    http.post(f"/users/{account['id']}/role-mappings/clients/{management}", json=roles).raise_for_status()
+    print(f"Control-plane client ready: {CONTROL_PLANE_CLIENT} (roles: {', '.join(CONTROL_PLANE_ROLES)})")
+
+
+def clean_agents() -> None:
+    """Delete every machine identity in the realm except the control plane's: agent identities left over from
+    earlier demo runs, and unmanaged ones created by the shadow-agent scene."""
+    http = admin_session()
+    removed = 0
+    first = 0
+    while True:
+        page = http.get("/clients", params={"first": first, "max": 100}).json()
+        for client in page:
+            machine = client.get("serviceAccountsEnabled") and not client.get("bearerOnly")
+            if machine and client["clientId"] != CONTROL_PLANE_CLIENT:
+                http.delete(f"/clients/{client['id']}").raise_for_status()
+                removed += 1
+        if len(page) < 100:
+            break
+        first += 100
+    print(f"Removed {removed} agent identities.")
 
 
 def print_summary(secrets_: dict[str, str]) -> None:
@@ -250,8 +337,9 @@ def print_summary(secrets_: dict[str, str]) -> None:
 
 
 def write_env() -> Path:
+    """Two opt-in settings files: people signing in (SSO) and agents' own identities."""
     HOME.mkdir(parents=True, exist_ok=True)
-    lines = [
+    people = [
         "# Generated by aegis_demo.keycloak_setup - dot-source it:  . .\\.local\\keycloak\\aegis-env.ps1",
         f"$env:AEGIS_OIDC_ISSUER = '{ISSUER}'",
         f"$env:AEGIS_OIDC_CLIENT_ID = '{CLIENT_ID}'",
@@ -259,14 +347,26 @@ def write_env() -> Path:
         f"$env:AEGIS_OIDC_ROLE_MAP = '{json.dumps(role_map())}'",
         "$env:AEGIS_ENABLE_DEV_LOGIN = 'true'   # set to 'false' to leave Keycloak as the only way in",
     ]
+    agents = [
+        "# Generated by aegis_demo.keycloak_setup. To keep agent identities in Keycloak, dot-source this too:",
+        "#   . .\\.local\\keycloak\\aegis-agent-idp-env.ps1",
+        "$env:AEGIS_AGENT_IDP = 'keycloak'",
+        f"$env:AEGIS_KEYCLOAK_URL = 'http://127.0.0.1:{PORT}'",
+        f"$env:AEGIS_KEYCLOAK_REALM = '{REALM}'",
+        f"$env:AEGIS_KEYCLOAK_ADMIN_CLIENT_ID = '{CONTROL_PLANE_CLIENT}'",
+        f"$env:AEGIS_KEYCLOAK_ADMIN_CLIENT_SECRET = '{credentials()['control_plane_secret']}'",
+    ]
+    (HOME / "aegis-agent-idp-env.ps1").write_text("\n".join(agents) + "\n", encoding="utf-8")
     path = HOME / "aegis-env.ps1"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(people) + "\n", encoding="utf-8")
     return path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local Keycloak for Aegis SSO")
-    parser.add_argument("action", choices=["start", "stop", "status", "env", "reset"])
+    parser.add_argument(
+        "action", choices=["start", "stop", "status", "env", "reset", "ensure-control-plane", "clean-agents"]
+    )
     parser.add_argument("--zip", type=Path, default=DEFAULT_ZIP, help="Keycloak server zip")
     parser.add_argument(
         "--console-origin",
@@ -279,6 +379,11 @@ def main() -> None:
     if args.action == "start":
         start(args.zip, origins)
         print(f"Settings written to {write_env()}")
+    elif args.action == "ensure-control-plane":
+        ensure_control_plane()
+        print(f"Settings written to {write_env()}")
+    elif args.action == "clean-agents":
+        clean_agents()
     elif args.action == "stop":
         stop()
     elif args.action == "status":

@@ -27,6 +27,7 @@ class ControlContext:
     taxonomy: dict[str, list[str]]
     users: UserAuthenticator | None = None  # who is this bearer token? (dev personas and/or OIDC)
     oidc: OidcVerifier | None = None
+    agent_identity: Any = None  # AgentIdentityProvider: where each agent's own identity lives
     builtin_oidc: Any = None  # the demo-only OIDC provider, when enabled
     telemetry: Any = None
     llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

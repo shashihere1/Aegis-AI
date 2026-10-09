@@ -63,6 +63,16 @@ class Settings(BaseModel):
     builtin_oidc: bool = False
     builtin_oidc_password: str = Field(default="", repr=False)
 
+    # --- Where agents get their identity ---
+    # "dev": the built-in demo identity provider. "keycloak": every approved agent becomes its own Keycloak client
+    # that signs in with a private key (private_key_jwt); Aegis manages it through a least-privilege admin client.
+    agent_idp: Literal["dev", "keycloak"] = "dev"
+    keycloak_url: str = ""  # base URL, e.g. http://127.0.0.1:8080 (the realm's public URL is {url}/realms/{realm})
+    keycloak_realm: str = "aegis"
+    keycloak_admin_client_id: str = "aegis-control-plane"  # service account holding manage-clients / view-clients
+    keycloak_admin_client_secret: str = Field(default="", repr=False)  # Key Vault reference in Azure
+    agent_token_ttl: int = 300  # seconds an agent's identity token lives (Keycloak enforces it per client)
+
     mandate_default_ttl: int = 300
     max_delegation_depth: int = 3
     approval_ttl: int = 900

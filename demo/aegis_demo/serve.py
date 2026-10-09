@@ -28,9 +28,13 @@ class DemoServer:
     async def _own(self, ready: asyncio.Future) -> None:
         try:
             from_env = Settings.from_env().model_dump()
-            # A disposable demo ignores database and other settings, but sign-in (SSO) settings still apply.
+            # A disposable demo ignores database and other settings, but identity settings (people's SSO and the
+            # agents' identity provider) still apply.
             sign_in = {
-                k: v for k, v in from_env.items() if k.startswith(("oidc_", "builtin_oidc")) or k == "enable_dev_login"
+                k: v
+                for k, v in from_env.items()
+                if k.startswith(("oidc_", "builtin_oidc", "keycloak_"))
+                or k in {"enable_dev_login", "agent_idp", "agent_token_ttl"}
             }
             overrides = sign_in if self.ephemeral else from_env
             if not self.ephemeral and not overrides["database_url"].startswith("postgresql"):
@@ -81,8 +85,10 @@ if __name__ == "__main__":
     sso_password = ""
     if args.sso:
         sso_password = os.environ.get("AEGIS_BUILTIN_OIDC_PASSWORD") or secrets.token_urlsafe(9)
-        print(f"Built-in SSO provider on. Sign in at the console with any demo account (e.g. sanne.bakker); "
-              f"password for this run: {sso_password}")
+        print(
+            f"Built-in SSO provider on. Sign in at the console with any demo account (e.g. sanne.bakker); "
+            f"password for this run: {sso_password}"
+        )
     print(f"Aegis console: http://127.0.0.1:{port}/ui/   ·   API docs: http://127.0.0.1:{port}/docs")
     server = DemoServer(ephemeral=args.ephemeral, sso_password=sso_password)
     uvicorn.run(server, host="127.0.0.1", port=port, log_level="warning")

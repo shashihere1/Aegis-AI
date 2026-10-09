@@ -63,7 +63,7 @@ export function AgentDetail() {
 
   const [modal, setModal] = useState<null | "suspend" | "approve" | "reject" | "resume" | "retire" | "passport" | "credentials">(null);
   const [reason, setReason] = useState("");
-  const [credentials, setCredentials] = useState<{ client_id: string; private_key_pem: string } | null>(null);
+  const [credentials, setCredentials] = useState<{ client_id: string; private_key_pem: string; token_endpoint?: string; assertion_audience?: string | null } | null>(null);
   const radius = useQuery({ queryKey: ["blast", id], queryFn: () => api<BlastRadius>(`/v1/agents/${id}/blast-radius`), enabled: modal === "suspend" });
   const passport = useQuery({ queryKey: ["passport", id], queryFn: () => api<{ passport: unknown; jws: string }>(`/v1/agents/${id}/passport`), enabled: modal === "passport" });
 
@@ -349,6 +349,14 @@ export function AgentDetail() {
         <Field label="Client ID">
           <div className="font-mono text-sm">{credentials?.client_id}</div>
         </Field>
+        {credentials?.token_endpoint && (
+          <div className="mt-3">
+            <Field label="Signs in at">
+              <div className="font-mono text-xs break-all">{credentials.token_endpoint}</div>
+              {credentials.assertion_audience && <div className="mt-1 text-xs text-faint">audience of the signed login note: {credentials.assertion_audience}</div>}
+            </Field>
+          </div>
+        )}
         <div className="mt-3">
           <JsonBlock value={credentials?.private_key_pem.split("\n").slice(0, 2).join("\n") + "\n…"} />
         </div>

@@ -195,20 +195,25 @@ class DevIdp:
         return client.client_id
 
 
-def client_assertion(client_id: str, private_pem: str, token_endpoint: str) -> str:
-    """Build a private_key_jwt client assertion (used by the SDK)."""
+def client_assertion(client_id: str, private_pem: str, audience: str) -> str:
+    """Build a private_key_jwt client assertion (used by the SDK).
+
+    `audience` is the token endpoint for the built-in IdP and the realm's issuer URL for Keycloak. The `kid` header
+    is the key's RFC 7638 thumbprint, which the provider derived from the public key it was given at provisioning.
+    """
     now = crypto.now()
     return jwt.encode(
         {
             "iss": client_id,
             "sub": client_id,
-            "aud": token_endpoint,
+            "aud": audience,
             "iat": now,
             "exp": now + 60,
             "jti": crypto.new_jti("ca"),
         },
         private_pem,
         algorithm=crypto.ALGORITHM,
+        headers={"kid": crypto.key_id(private_pem)},
     )
 
 

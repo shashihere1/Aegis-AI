@@ -314,3 +314,21 @@ export interface StudioStatus {
   emails_sent: number;
   transfers: { payment_id: string; amount: number; creditor_iban: string }[];
 }
+
+export interface IdentityStatus {
+  provider: string;
+  reachable: boolean;
+  issuer: string;
+  detail?: string;
+  agents_with_identity: number;
+}
+
+export interface ReconcileReport {
+  provider: string;
+  checked: number;
+  enabled: string[];
+  disabled: string[];
+  missing: string[];
+  orphaned: string[];
+  errors: { client_id: string; error: string }[];
+}

@@ -12,6 +12,7 @@ Effective permission = agent capabilities ∩ user entitlements ∩ mandate purp
 """
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -34,6 +35,9 @@ TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 JWT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt"
 TIER_TTL = {"low": 900, "medium": 600, "high": 300, "critical": 120}
 LLM_SCOPE = "llm.chat"
+
+
+log = logging.getLogger("aegis.sts")
 
 
 class StsError(Exception):
@@ -96,9 +100,12 @@ async def exchange(c: ControlContext, s: AsyncSession, form: dict) -> dict:
     if not form.get("actor_token"):
         raise StsError("invalid_request", "actor_token (the agent's identity) is required")
     try:
-        client_id = c.idp.verify_agent_token(form["actor_token"])
+        client_id = await c.agent_identity.verify_token(form["actor_token"])
     except jwt.InvalidTokenError as exc:
         raise StsError("invalid_client", f"agent identity rejected: {exc}") from exc
+    except IdentityUnavailable as exc:  # fail closed: no identity check, no Mandate
+        log.error("agent identity check failed: %s", exc)
+        raise StsError("temporarily_unavailable", "the identity provider is unavailable") from exc
     agent = (await s.execute(select(Agent).where(Agent.idp_client_id == client_id))).scalar_one_or_none()
     if agent is None or agent.status != AgentStatus.ACTIVE:
         raise StsError("invalid_grant", "agent is not registered or not active", "AGT-001")
@@ -327,15 +334,25 @@ async def suspend_agent(c: ControlContext, s: AsyncSession, agent_id: str, reaso
     agent = await s.get(Agent, agent_id)
     radius = await blast_radius(s, agent_id)
     await c.hotstore.revoke("agent", agent_id, reason)
+    identity_error = None
     if agent is not None:
         agent.status = AgentStatus.SUSPENDED
         if agent.idp_client_id:
-            c.idp.set_enabled(agent.idp_client_id, False)
+            try:
+                await c.agent_identity.set_enabled(agent.idp_client_id, False)
+            except IdentityUnavailable as exc:
+                # The kill switch must not depend on the provider: the agent is already suspended and its Mandates
+                # revoked, and the STS refuses non-active agents. Record it; reconcile repairs the provider side.
+                identity_error = str(exc)
+                log.error("could not disable the identity of %s: %s", agent_id, exc)
     await revoke_tree(c, s, radius["mandates"], reason, actor)
     for approval_id in radius["pending_approvals"]:
         approval = await s.get(Approval, approval_id)
         approval.status = "cancelled"
-    await ledger.append(s, "agent.suspended", actor, agent_id, {"reason": reason, "blast_radius": radius})
+    evidence = {"reason": reason, "blast_radius": radius}
+    if identity_error:
+        evidence["identity_disable_failed"] = identity_error
+    await ledger.append(s, "agent.suspended", actor, agent_id, evidence)
     return radius
 
 
@@ -412,7 +429,8 @@ def router() -> APIRouter:
             await ledger.append(s, "mandate.denied", "sts", exc.rule or exc.error, {"reason": exc.description})
             await s.commit()
             return JSONResponse(
-                {"error": exc.error, "error_description": exc.description, "rule": exc.rule}, status_code=400
+                {"error": exc.error, "error_description": exc.description, "rule": exc.rule},
+                status_code=503 if exc.error == "temporarily_unavailable" else 400,
             )
 
     @r.get("/.well-known/jwks.json")

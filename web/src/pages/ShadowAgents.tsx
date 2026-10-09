@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Fingerprint, Ghost, Radar, ShieldBan, UserPlus } from "lucide-react";
+import { Fingerprint, Ghost, KeyRound, Radar, RefreshCw, ShieldBan, UserPlus } from "lucide-react";
 import { post } from "../lib/api";
-import { useFindings, useStats } from "../lib/queries";
+import { useFindings, useIdentityStatus, useStats } from "../lib/queries";
 import { useToast } from "../lib/toast";
 import { timeAgo } from "../lib/format";
-import type { Finding } from "../lib/types";
+import type { Finding, ReconcileReport } from "../lib/types";
 import { Button, Card, Chip, EmptyState, Kpi, Loading, Modal, PageHeader, Pill, StatusPill } from "../components/ui";
 import { AgentForm, type AgentDraft } from "./RegisterAgent";
 
@@ -22,6 +22,7 @@ function evidenceSummary(f: Finding): string {
 export function ShadowAgents() {
   const findings = useFindings();
   const stats = useStats().data;
+  const identity = useIdentityStatus().data;
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -29,8 +30,22 @@ export function ShadowAgents() {
 
   const scan = useMutation({
     mutationFn: () => post<{ found: string[] }>("/v1/discovery/scan"),
-    onSuccess: (r) => (toast("success", "IdP scan complete", `${r.found.length} unmanaged identities`), queryClient.invalidateQueries({ queryKey: ["findings"] })),
+    onSuccess: (r) => (toast("success", "Identity scan complete", `${r.found.length} unmanaged identities`), queryClient.invalidateQueries({ queryKey: ["findings"] })),
     onError: (e: Error) => toast("error", "Scan refused", e.message),
+  });
+  const reconcile = useMutation({
+    mutationFn: () => post<ReconcileReport>("/v1/identity/reconcile"),
+    onSuccess: (r) => {
+      const fixed = r.enabled.length + r.disabled.length;
+      const problems = r.missing.length + r.orphaned.length + r.errors.length;
+      toast(
+        problems ? "error" : "success",
+        "Identities reconciled",
+        `${r.checked} checked, ${fixed} repaired${problems ? `, ${r.missing.length} missing, ${r.orphaned.length} orphaned, ${r.errors.length} errors` : ""}`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["identity-status"] });
+    },
+    onError: (e: Error) => toast("error", "Reconcile refused", e.message),
   });
   const quarantine = useMutation({
     mutationFn: (f: Finding) => post(`/v1/discovery/findings/${f.id}/quarantine`),
@@ -56,13 +71,27 @@ export function ShadowAgents() {
       <PageHeader
         icon={Ghost}
         title="Shadow Agents"
-        subtitle="Agents acting without a governed identity, found from Gateway traffic and IdP scans"
+        subtitle="Agents acting without a governed identity, found from Gateway traffic and a scan of the identity provider"
         actions={
           <Button icon={Radar} roles={["soc-analyst", "admin"]} loading={scan.isPending} onClick={() => scan.mutate()}>
             Run IdP scan
           </Button>
         }
       />
+      {identity && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-card px-4 py-3 text-sm">
+          <KeyRound className="size-4 text-accent" />
+          <span>
+            Agent identities live in <b>{identity.provider === "keycloak" ? "Keycloak" : "the built-in development IdP"}</b>
+          </span>
+          <Pill tone={identity.reachable ? "good" : "critical"}>{identity.reachable ? "reachable" : "unreachable"}</Pill>
+          <span className="text-muted">{identity.agents_with_identity} governed agent identities</span>
+          {identity.detail && <span className="truncate text-xs text-critical-ink">{identity.detail}</span>}
+          <Button className="ml-auto" icon={RefreshCw} roles={["admin", "security-approver"]} loading={reconcile.isPending} onClick={() => reconcile.mutate()}>
+            Reconcile
+          </Button>
+        </div>
+      )}
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Kpi icon={Ghost} tone="warning" label="Open findings" value={open.length} />
         <Kpi icon={ShieldBan} tone="critical" label="Quarantined" value={list.filter((f) => f.status === "quarantined").length} />

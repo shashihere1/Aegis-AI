@@ -101,7 +101,7 @@ async def main() -> None:
         await w.http.post(f"{BASE}/gw/mcp/crm", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
             "name": "get_customer", "arguments": {"customer_id": "C-1001"}}},
             headers={"x-api-key": "static-key", "user-agent": "marketing-lead-scraper/0.3"})
-        w.ctx.idp.register_unmanaged_client("marketing-lead-scraper", "Marketing lead scraper")
+        await w.ctx.agent_identity.register_unmanaged("marketing-lead-scraper", "Marketing lead scraper")
         await w.api("mark.jansen", "POST", "/v1/discovery/scan")
         for f in (await w.api("mark.jansen", "GET", "/v1/discovery/findings")).json():
             say(f"finding {f['fingerprint']} via {f['sources']} ({f['hits']} hit)")

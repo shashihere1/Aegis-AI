@@ -24,6 +24,7 @@ from aegis.common.ids import agent_id as new_agent_id
 from aegis.common.models import AgentStatus
 from aegis.common.settings import REPO_ROOT, Settings
 from aegis.control.app import create_app
+from aegis.control.identity.agent_identity import IdentityNotFound
 from aegis.control.identity.idp import Persona
 from aegis.control.policies import ManagedEngine
 from aegis.control.tables import Agent, McpServer
@@ -61,13 +62,26 @@ class SpaStaticFiles(StaticFiles):
 
 
 class InProcessTransport(httpx.AsyncBaseTransport):
-    """Routes every request to the composite ASGI app (set after the apps are built)."""
+    """Routes requests for this server (BASE) to the composite ASGI app, which is set after the apps are built.
+
+    Any other host goes over the real network, so demo agents can sign in at an actual Keycloak.
+    """
 
     def __init__(self) -> None:
         self.app = None
+        self._network = httpx.AsyncHTTPTransport()
+        self._local = httpx.URL(BASE)
+
+    def is_local(self, url: httpx.URL) -> bool:
+        return (url.scheme, url.host, url.port) == (self._local.scheme, self._local.host, self._local.port)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return await httpx.ASGITransport(app=self.app).handle_async_request(request)
+        if self.is_local(request.url):
+            return await httpx.ASGITransport(app=self.app).handle_async_request(request)
+        return await self._network.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._network.aclose()
 
 
 @dataclass
@@ -190,14 +204,23 @@ async def bootstrap(w: World) -> None:
             )
         )
 
+    provider = w.ctx.agent_identity
     for key, agent_id in w.agent_ids.items():
         existing = existing_agents.get(catalog.AGENTS[key]["name"])
         if existing and existing.idp_client_id:
-            creds = {
-                "client_id": existing.idp_client_id,
-                "private_key_pem": w.ctx.idp.development_private_key(existing.idp_client_id),
-            }
-            w.ctx.idp.set_enabled(existing.idp_client_id, existing.status == AgentStatus.ACTIVE)
+            should_be_active = existing.status == AgentStatus.ACTIVE
+            try:
+                creds = {
+                    "client_id": existing.idp_client_id,
+                    "private_key_pem": await provider.development_private_key(existing.idp_client_id),
+                    "token_endpoint": provider.token_endpoint,
+                    "assertion_audience": provider.assertion_audience,
+                }
+                await provider.set_enabled(existing.idp_client_id, should_be_active)
+            except IdentityNotFound:
+                # The provider no longer knows this agent (e.g. the realm was recreated): issue a fresh identity.
+                creds = (await provider.provision(existing.id, existing.name)).credentials()
+                await provider.set_enabled(existing.idp_client_id, should_be_active)
         else:
             if not existing or existing.status == AgentStatus.DRAFT:
                 _ok(await w.api("priya.raman", "POST", f"/v1/agents/{agent_id}/submit"))
@@ -206,13 +229,8 @@ async def bootstrap(w: World) -> None:
                     "sanne.bakker", "POST", f"/v1/agents/{agent_id}/approve", json={"reason": "demo onboarding"}
                 )
             )["credentials"]
-        w.sdks[key] = AegisAgent(
-            w.http,
-            BASE,
-            w.settings.gateway_url,
-            creds["client_id"],
-            creds["private_key_pem"],
-            telemetry=w.ctx.telemetry,
+        w.sdks[key] = AegisAgent.from_credentials(
+            w.http, BASE, w.settings.gateway_url, creds, telemetry=w.ctx.telemetry
         )
     w.kyc_app.state.sdk = w.sdks["kyc-agent"]
     w.payments_app.state.sdk = w.sdks["payments-agent"]
@@ -284,7 +302,12 @@ async def seed_registry(w: World, count: int) -> None:
 
 
 @asynccontextmanager
-async def running_world(seed: int = 0, **overrides):
+async def running_world(seed: int = 0, *, agent_identity_factory=None, extra_routes=(), **overrides):
+    """Boot the whole demo in one process.
+
+    `agent_identity_factory(settings, http)` may supply the agents' identity provider and `extra_routes` adds more
+    in-process services (tests mount a fake Keycloak this way); both default to the built-in behaviour.
+    """
     values = dict(
         control_url=BASE, gateway_url=f"{BASE}/gw", database_url="sqlite+aiosqlite:///:memory:", cache_seconds=0
     )
@@ -305,7 +328,8 @@ async def running_world(seed: int = 0, **overrides):
 
     http = httpx.AsyncClient(transport=transport, timeout=60.0, event_hooks={"request": [inject_trace]})
     hotstore = MemoryHotStore()
-    control = create_app(settings, http, hotstore)
+    identity = agent_identity_factory(settings, http) if agent_identity_factory else None
+    control = create_app(settings, http, hotstore, agent_identity=identity)
     gateway = create_gateway(
         settings,
         http,
@@ -343,6 +367,7 @@ async def running_world(seed: int = 0, **overrides):
             Mount("/demo/agents/payments", payments_app),
             Mount("/demo/fake-llm", fake_llm_app()),
             Mount("/demo/api", studio),
+            *extra_routes,
             *ui,
             Mount("/", control),
         ]

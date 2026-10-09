@@ -1,4 +1,5 @@
-"""Shadow-agent discovery (plan §8.2, flow F7). Sources: Gateway traffic and IdP scan."""
+"""Shadow-agent discovery (plan §8.2, flow F7). Sources: Gateway traffic and a scan of the identity provider
+(the built-in IdP or Keycloak) for identities the registry does not govern."""
 
 from datetime import UTC, datetime
 
@@ -12,6 +13,7 @@ from aegis.common.models import AgentCreate, AgentStatus
 from aegis.control import ledger
 from aegis.control.auth import OPERATORS, require_roles
 from aegis.control.context import ControlContext, session
+from aegis.control.identity.agent_identity import IdentityNotFound
 from aegis.control.identity.idp import Persona
 from aegis.control.tables import Agent, Alert, DiscoveryFinding
 
@@ -43,6 +45,14 @@ async def record_signal(s: AsyncSession, source: str, fingerprint: str, evidence
     return finding
 
 
+async def disable_identity(c: ControlContext, fingerprint: str) -> None:
+    """Switch off an ungoverned identity. One that has already vanished from the provider is the desired end state."""
+    try:
+        await c.agent_identity.set_enabled(fingerprint.removeprefix("idp-client:"), False)
+    except IdentityNotFound:
+        pass
+
+
 def router() -> APIRouter:
     r = APIRouter(prefix="/v1/discovery", tags=["discovery"])
 
@@ -56,9 +66,11 @@ def router() -> APIRouter:
                    user: Persona = Depends(require_roles("soc-analyst", "admin"))):
         """IdP scan: identities that exist in the IdP but are not governed by the registry."""
         c: ControlContext = request.app.state.ctx
+        known_agents = set((await s.scalars(select(Agent.id))).all())
         found = []
-        for client in c.idp.list_clients():
-            if client.agent_id is None:
+        for client in await c.agent_identity.list_clients():
+            # Ungoverned: no agent behind it, or it names an agent the registry has never heard of.
+            if client.agent_id is None or client.agent_id not in known_agents:
                 finding = await record_signal(s, "idp", f"idp-client:{client.client_id}",
                                               {"client_id": client.client_id, "name": client.name})
                 found.append(finding.fingerprint)
@@ -77,7 +89,7 @@ def router() -> APIRouter:
         finding.status, finding.agent_id = "claimed", agent.id
         if finding.fingerprint.startswith("idp-client:"):
             # The unmanaged identity is disabled; the agent gets a governed identity once approved.
-            request.app.state.ctx.idp.set_enabled(finding.fingerprint.removeprefix("idp-client:"), False)
+            await disable_identity(request.app.state.ctx, finding.fingerprint)
         await ledger.append(s, "discovery.claimed", f"user:{user.username}", finding.fingerprint,
                             {"agent_id": agent.id})
         await s.commit()
@@ -92,7 +104,7 @@ def router() -> APIRouter:
         c: ControlContext = request.app.state.ctx
         await c.hotstore.block_fingerprint(finding.fingerprint)
         if finding.fingerprint.startswith("idp-client:"):
-            c.idp.set_enabled(finding.fingerprint.removeprefix("idp-client:"), False)
+            await disable_identity(c, finding.fingerprint)
         finding.status = "quarantined"
         await ledger.append(s, "discovery.quarantined", f"user:{user.username}", finding.fingerprint, {})
         await s.commit()

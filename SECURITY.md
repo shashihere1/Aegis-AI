@@ -16,7 +16,23 @@ The attack suite in `tests/test_scenarios.py` is mapped to the OWASP Top 10 for 
 ## Development-only components — never deploy as-is
 - **Dev IdP** (`/idp/login`) has no passwords. For any shared environment set `AEGIS_ENABLE_DEV_LOGIN=false` (login and
   persona list return 403 and persona tokens are rejected) and configure an OpenID Connect provider (`AEGIS_OIDC_*`,
-  see the README). Agents' own identities still come from the dev IdP until a Keycloak/Entra provisioning adapter exists.
+  see the README). Agents' own identities come from the dev IdP unless `AEGIS_AGENT_IDP=keycloak`.
+- **Keycloak agent identities** (`AEGIS_AGENT_IDP=keycloak`):
+  - Aegis holds one credential for Keycloak, the `aegis-control-plane` client secret (`AEGIS_KEYCLOAK_ADMIN_CLIENT_SECRET`;
+    a Key Vault reference in Azure). It can manage clients in the `aegis` realm and nothing else: no users, groups, realm
+    settings, other realms. It *can* change any client in that realm, so Aegis refuses to touch its own and Keycloak's
+    built-in clients; restrict it further with Keycloak's fine-grained admin permissions in production.
+  - Keycloak stores only each agent's public key. It also keeps an unused internal client secret on every confidential
+    client; the signed-JWT authenticator refuses sign-in with it (tested), so no shared secret can act as an agent.
+  - The agent's private key is returned once at approval. The demo runtime additionally keeps a copy under
+    `AEGIS_IDENTITY_STATE_DIR` (git-ignored) so a restarted demo can reuse it; never do this in production.
+  - An identity token is valid for 5 minutes. Aegis re-confirms that the client is enabled at most every 10 seconds, and
+    immediately after Aegis itself disables it. A token issued before a suspension is also useless because the STS refuses
+    agents that are not active.
+  - Failure behaviour: if Keycloak cannot be reached, approvals, resumes and Mandate requests fail with 503 (nothing is
+    half-done, no Mandate is issued). Suspension is the exception: it always succeeds in Aegis, records
+    `identity_disable_failed` in the ledger, and `POST /v1/identity/reconcile` (admin / security approver) disables the
+    identity once Keycloak is back. Start-up also reconciles.
 - **Built-in OIDC provider** (`--sso`, `/oidc`) is for demos: one shared password, ephemeral signing keys, no MFA.
   Never enable `AEGIS_BUILTIN_OIDC` outside a laptop.
 - **SSO checks:** only asymmetric algorithms are accepted (no `none`/HS256 key confusion), issuer, audience and expiry are

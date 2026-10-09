@@ -1,5 +1,7 @@
 """ES256 signing keys, JWT issue/verify and JWKS export."""
 
+import base64
+import hashlib
 import json
 import time
 import uuid
@@ -27,6 +29,19 @@ def public_pem_from_private(private_pem: str) -> str:
         .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         .decode()
     )
+
+
+def public_jwk(public_pem: str) -> dict[str, Any]:
+    """The public half of an ES256 key as a JWK with a stable key id (RFC 7638 thumbprint)."""
+    jwk = json.loads(jwt.algorithms.ECAlgorithm.to_jwk(serialization.load_pem_public_key(public_pem.encode())))
+    canonical = json.dumps({k: jwk[k] for k in ("crv", "kty", "x", "y")}, separators=(",", ":"), sort_keys=True)
+    kid = base64.urlsafe_b64encode(hashlib.sha256(canonical.encode()).digest()).rstrip(b"=").decode()
+    return {**jwk, "kid": kid, "use": "sig", "alg": ALGORITHM}
+
+
+def key_id(private_pem: str) -> str:
+    """Key id of a private key's public half; provider and agent derive the same value independently."""
+    return public_jwk(public_pem_from_private(private_pem))["kid"]
 
 
 class SigningKey:

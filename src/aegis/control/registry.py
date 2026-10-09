@@ -14,6 +14,7 @@ from aegis.control import ledger
 from aegis.control.auth import OPERATORS, current_user, require_roles
 from aegis.control.context import ControlContext, session
 from aegis.control.identity import sts
+from aegis.control.identity.agent_identity import IdentityNotFound
 from aegis.control.identity.idp import Persona
 from aegis.control.tables import Agent, Alert, Tool
 
@@ -203,14 +204,19 @@ def router() -> APIRouter:
         c: ControlContext = request.app.state.ctx
         await transition(s, agent, AgentStatus.ACTIVE, f"user:{user.username}", body.reason)
         credentials = None
+        event = "identity.provisioned"
+        if agent.idp_client_id is not None:
+            try:
+                await c.agent_identity.set_enabled(agent.idp_client_id, True)
+            except IdentityNotFound:  # the provider lost it (e.g. the realm was recreated): issue a new identity
+                agent.idp_client_id, event = None, "identity.reprovisioned"
         if agent.idp_client_id is None:
-            client_id, private_pem = c.idp.provision_agent_identity(agent.id, agent.name)
-            agent.idp_client_id = client_id
-            credentials = {"client_id": client_id, "private_key_pem": private_pem}
-            await ledger.append(s, "identity.provisioned", f"user:{user.username}", agent.id,
-                                {"client_id": client_id, "idp": "dev-idp"})
-        else:
-            c.idp.set_enabled(agent.idp_client_id, True)
+            # A provider failure raises 503 before anything is committed, so the agent stays pending approval.
+            issued = await c.agent_identity.provision(agent.id, agent.name)
+            agent.idp_client_id = issued.client_id
+            credentials = issued.credentials()
+            await ledger.append(s, event, f"user:{user.username}", agent.id,
+                                {"client_id": issued.client_id, "idp": issued.provider})
         await s.commit()
         # The private key is returned exactly once, for the agent runtime's secret store.
         return {"agent": to_dict(agent), "credentials": credentials}
@@ -246,7 +252,10 @@ def router() -> APIRouter:
         await transition(s, agent, AgentStatus.ACTIVE, f"user:{user.username}", body.reason)
         c: ControlContext = request.app.state.ctx
         if agent.idp_client_id:
-            c.idp.set_enabled(agent.idp_client_id, True)
+            try:
+                await c.agent_identity.set_enabled(agent.idp_client_id, True)
+            except IdentityNotFound as exc:
+                raise HTTPException(409, "this agent's identity no longer exists; approve the agent again") from exc
         # Old mandates stay revoked; only new mandates can be issued again.
         await c.hotstore.clear("agent", agent_id)
         await s.commit()

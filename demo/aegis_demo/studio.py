@@ -374,7 +374,7 @@ def studio_app(get_world: Callable) -> FastAPI:
             f"HTTP {response.status_code}: a Mandate is required",
         )
         client = f"lead-enrichment-bot-{n}-{uuid.uuid4().hex[:8]}"
-        w.ctx.idp.register_unmanaged_client(client, "Lead enrichment bot")
+        await w.ctx.agent_identity.register_unmanaged(client, "Lead enrichment bot")
         step(run, f"An identity '{client}' was created directly in the IdP, bypassing Aegis")
         found = (await w.api("mark.jansen", "POST", "/v1/discovery/scan")).json()["found"]
         step(run, "IdP scan found identities not governed by the registry", detail=", ".join(found[-3:]))

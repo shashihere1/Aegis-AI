@@ -19,6 +19,7 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Agent registry, lifecycle (register → approve → suspend → retire), risk tiering, signed passport | ✅ | `src/aegis/control/registry.py` |
 | Segregation of duties (registrant/owner cannot approve; approver ≠ initiator/owner) | ✅ | `registry.py`, `approvals.py` |
 | IdP integration seam + dev IdP; agents authenticate with `private_key_jwt` (no shared secrets) | ✅ | `src/aegis/control/identity/idp.py` |
+| **Every agent's own identity in Keycloak**: a per-agent client registered with the agent's public key only, signed-JWT sign-in, short-lived tokens checked on every Mandate request, kill switch that disables the identity, drift repair, shadow-identity discovery | ✅ (tested against a real Keycloak 26.2.5 and a fake; Entra Agent ID not built) | `agent_identity.py`, `identity_sync.py` |
 | JIT, task-scoped, purpose-bound Mandates; agent ∩ user ∩ purpose ("intersection rule") | ✅ | `src/aegis/control/identity/sts.py` |
 | A2A delegation with attenuation, nested `act` chain, depth/cycle/pair rules | ✅ | `sts.py`, `src/aegis/gateway/app.py` |
 | Central PDP: allow / deny / require-approval / redact / rate-limit, policy version on every decision | ✅ | `config/policies/`, `src/aegis/policy/engine.py` |
@@ -40,7 +41,7 @@ and LLM call goes through the **Aegis Gateway**, where a policy decision point r
 | Explainable adaptive risk from actual recorded traffic and security alerts | ✅ (statistical baseline, not an ML model) | `src/aegis/control/risk.py` |
 | React console in the prototype's look (17 screens, live data, persona switcher, Demo Studio) | ✅ | `web/` |
 | Sign-in for people through any OpenID Connect provider (Keycloak, Microsoft Entra ID, Okta...): authorization code + PKCE, signature/issuer/audience/expiry checks, provider roles mapped to Aegis roles; dev login can be switched off | ✅ (tested against a fake provider and a built-in one; not yet against a live Keycloak or Entra tenant) | `src/aegis/control/identity/oidc.py`, `users.py`, `web/src/lib/auth.ts` |
-| Regulatory-grade evidence packs, Copilot, Azure deployment, Entra Agent ID / Keycloak provisioning of *agent* identities and managed OPA policy publishing | ⏳ remaining | — |
+| Regulatory-grade evidence packs, Copilot, Azure deployment, Microsoft Entra Agent ID provisioning of agent identities and managed OPA policy publishing | ⏳ remaining | — |
 
 ## The console
 
@@ -114,7 +115,8 @@ SDK), the KYC and Payments agents (A2A) and Ava, with synthetic data only. Perso
 People sign in at an identity provider, never with a password typed into Aegis. The console runs the standard
 authorization-code flow with PKCE and sends the resulting access token as a bearer token; the control plane checks
 its signature against the provider's published keys (JWKS), its issuer, audience and expiry, then maps the provider's
-roles or groups to Aegis roles. Agents are separate: they keep authenticating with `private_key_jwt`.
+roles or groups to Aegis roles. Agents are separate: each authenticates with its own `private_key_jwt` identity, see
+[Agent identities in Keycloak](#agent-identities-in-keycloak).
 
 ```powershell
 # Try it on a laptop, nothing to install: also starts a small built-in OIDC provider at /oidc (demo only)
@@ -152,6 +154,34 @@ The realm is generated from the demo personas (same usernames and roles; every u
 printed by `start` and kept in `.local/keycloak/credentials.json`, which is git-ignored). The `aegis-console` client
 is public with S256 PKCE and exact redirect URIs. Stop the built-in `--sso` server first if it is using port 8000.
 
+### Agent identities in Keycloak
+
+By default agents get their identity from the built-in demo IdP. With `AEGIS_AGENT_IDP=keycloak`, **every approved agent
+becomes its own Keycloak client** and Keycloak (not Aegis) issues its identity token:
+
+| Step | What happens |
+|---|---|
+| Approval | Aegis creates the client `agent-<agent id>` through Keycloak's Admin API: signed-JWT sign-in only, no flows, no scopes, and **only the agent's public key** (as a JWKS). The private key is returned once in the approval response for the agent's own secret store. |
+| Each task | The agent signs a 60-second note with its private key and gets a 5-minute token from Keycloak, addressed to `aegis-sts`. It exchanges that for a purpose-bound Mandate, as before. |
+| Every exchange | Aegis checks the token against the realm's published keys (issuer, audience, expiry, token type) and that the client still exists and is enabled (cached for at most 10 s). If Keycloak cannot be asked, no Mandate is issued. |
+| Suspend / retire / quarantine | The identity is disabled in Keycloak at once, in addition to revoking Mandates. The kill switch does **not** depend on Keycloak: if it is down, the agent is still suspended, the failure is written to the ledger, and `POST /v1/identity/reconcile` repairs the provider side later. |
+| Discovery | The scan lists the realm's machine identities and flags any that no registry agent stands behind (shadow) or whose agent no longer exists (orphaned). |
+
+Aegis manages Keycloak as a **least-privilege service account** (`aegis-control-plane`): it may manage clients in the `aegis`
+realm and nothing else; it cannot read users, change realm settings or touch other realms (verified by the tests).
+
+```powershell
+.venv\Scripts\python -m aegis_demo.keycloak_setup start              # also creates the control-plane client (safe to repeat)
+. .\.local\keycloak\aegis-agent-idp-env.ps1                          # AEGIS_AGENT_IDP=keycloak and the admin client's settings
+.venv\Scripts\python -m aegis_demo.serve --ephemeral
+.venv\Scripts\python -m aegis_demo.keycloak_setup clean-agents        # remove identities left by earlier demo runs
+```
+
+With a disposable (`--ephemeral`) demo every start creates new agents, so old identities pile up in Keycloak and the scan reports them
+as orphaned; `clean-agents` clears them. Tests: `tests/test_agent_identity.py` (fake Keycloak), `tests/test_agent_identity_world.py`
+(whole system with a fake), and `tests/test_keycloak_agent_identity_live.py` / `tests/test_keycloak_world_live.py` (a real Keycloak,
+skipped when it is not running).
+
 ## Architecture
 
 ```
@@ -167,7 +197,7 @@ scene-by-scene flow.
 
 | Concern | Local / tests | Azure deployment (planned) |
 |---|---|---|
-| Identity provider | Built-in dev IdP (no passwords — never expose); optional built-in OIDC demo provider (`--sso`) | People: any OIDC provider (Keycloak, Entra ID...) through `AEGIS_OIDC_*`. Agent identities: Keycloak / Entra Agent ID provisioning adapter (not built yet) |
+| Identity provider | Built-in dev IdP (no passwords — never expose); optional built-in OIDC demo provider (`--sso`) | People: any OIDC provider (Keycloak, Entra ID...) through `AEGIS_OIDC_*`. Agent identities: Keycloak (`AEGIS_AGENT_IDP=keycloak`, built and tested); Microsoft Entra Agent ID not built |
 | Policy engine | In-process Python engine implementing `config/policies/tool_call.rego` | OPA sidecar with the same Rego; `tests/test_policy.py` checks both agree when `opa` is installed |
 | Database | Persistent PostgreSQL for `serve`; SQLite only for tests/narration/explicit `--ephemeral` | Managed PostgreSQL, migration/backup/retention procedures still required |
 | Hot store | In-memory | Valkey (`ValkeyHotStore`, extra `valkey`) |
@@ -264,8 +294,9 @@ narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.tx
 See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords (switch it off with `AEGIS_ENABLE_DEV_LOGIN=false`); SSO has been tested only against a fake provider and the built-in one, not a live Keycloak/Entra tenant; the Python policy engine
 must be kept in step with the Rego (conformance tests); Studio scenes remain scripted, while the optional
 [Bank Assistant](docs/live-agents.md) uses real LangGraph/Azure planning and a Microsoft Agent Framework KYC workflow;
-governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; agent-identity
-provisioning in Keycloak/Entra, managed OPA publishing and Azure deployment are not built yet. Adaptive risk is an explainable
+governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; Microsoft Entra Agent ID
+provisioning, managed OPA publishing and Azure deployment are not built yet; Keycloak agent identities have been run
+only on a local single-node Keycloak (no clustering, TLS or secret manager). Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
 governance and evidence records now persist in PostgreSQL.
 

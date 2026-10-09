@@ -65,27 +65,49 @@ class AegisAgent:
         client_id: str,
         private_key_pem: str,
         telemetry=None,
+        *,
+        token_endpoint: str | None = None,
+        assertion_audience: str | None = None,
     ):
         self.http = http
         self.control_url = control_url.rstrip("/")
         self.gateway_url = gateway_url.rstrip("/")
         self.client_id = client_id
         self._key = private_key_pem
+        # Where this agent signs in. Defaults to the built-in IdP; with Keycloak the approval response carries both.
+        self.token_endpoint = token_endpoint or f"{self.control_url}/idp/token"
+        self.assertion_audience = assertion_audience or self.token_endpoint
         self._identity: tuple[str, int] | None = None
         self.tracer = telemetry.tracer("aegis.sdk") if telemetry else trace.get_tracer("aegis.sdk")
+
+    @classmethod
+    def from_credentials(
+        cls, http: httpx.AsyncClient, control_url: str, gateway_url: str, credentials: dict, telemetry=None
+    ) -> AegisAgent:
+        """Build an agent from the `credentials` object returned once when the agent was approved."""
+        return cls(
+            http,
+            control_url,
+            gateway_url,
+            credentials["client_id"],
+            credentials["private_key_pem"],
+            telemetry,
+            token_endpoint=credentials.get("token_endpoint"),
+            assertion_audience=credentials.get("assertion_audience"),
+        )
 
     async def identity_token(self) -> str:
         """Short-lived identity from the IdP via a private_key_jwt client assertion (no shared secret)."""
         if self._identity and self._identity[1] - 30 > crypto.now():
             return self._identity[0]
-        endpoint = f"{self.control_url}/idp/token"
         response = await self.http.post(
-            endpoint,
+            self.token_endpoint,
             headers=current_trace_headers(),
             data={
                 "grant_type": "client_credentials",
+                "client_id": self.client_id,
                 "client_assertion_type": ASSERTION_TYPE,
-                "client_assertion": client_assertion(self.client_id, self._key, endpoint),
+                "client_assertion": client_assertion(self.client_id, self._key, self.assertion_audience),
             },
         )
         if response.status_code != 200:
