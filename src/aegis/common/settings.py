@@ -107,6 +107,8 @@ class Settings(BaseModel):
 
     # One-process demo shares this random capability. Separate services must configure a protected shared value.
     investigation_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
+    bank_sandbox_enabled: bool = False
+    bank_sandbox_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
 
     # Gateway → control-plane service identity (asymmetric; no shared secret).
     # The Gateway signs each internal call with its private ES256 key; the control plane verifies with

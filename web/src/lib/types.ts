@@ -289,32 +289,6 @@ export interface GuardScan {
   redacted: string;
 }
 
-export interface StudioStep {
-  label: string;
-  status: "ok" | "denied" | "waiting" | "alert";
-  detail: string;
-  at: string;
-}
-
-export interface StudioRun {
-  id: string;
-  key: string;
-  title: string;
-  scene: string;
-  status: "running" | "waiting" | "completed" | "contained" | "blocked";
-  started_at: string;
-  steps: StudioStep[];
-  links: { root_id?: string; approval_id?: string; alert_ids?: string[] };
-}
-
-export interface StudioStatus {
-  agents: Record<string, { id: string; status: string }>;
-  kyc_variant: string;
-  kyc_tool_status: Record<string, string>;
-  emails_sent: number;
-  transfers: { payment_id: string; amount: number; creditor_iban: string }[];
-}
-
 export interface IdentityStatus {
   provider: string;
   reachable: boolean;

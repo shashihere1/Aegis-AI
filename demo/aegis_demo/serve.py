@@ -12,7 +12,7 @@ import secrets
 import uvicorn
 
 from aegis.common.settings import Settings
-from aegis_demo.world import FAKE_LLM_URL, running_world
+from aegis_demo.world import running_world
 
 
 class DemoServer:
@@ -46,9 +46,7 @@ class DemoServer:
             )
             if self.sso_password:
                 overrides.update(builtin_oidc=True, builtin_oidc_password=self.sso_password)
-            if not overrides.get("azure_openai_endpoint") and not overrides.get("llm_upstream_url"):
-                overrides["llm_upstream_url"] = FAKE_LLM_URL
-            async with running_world(seed=1244, **overrides) as world:
+            async with running_world(**overrides) as world:
                 ready.set_result(world)
                 await self._stop.wait()
         except Exception as exc:

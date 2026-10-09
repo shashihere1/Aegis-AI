@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from aegis_demo import data, mcp_servers
-from aegis_demo.world import FAKE_LLM_URL, running_world
+from aegis_demo.testing import FAKE_LLM_URL, running_world
 
 logging.getLogger("mcp").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aegis.common.banking import upstream_headers as bank_headers
 from aegis.common.hashing import tool_definition_hash
 from aegis.common.ids import new_id
 from aegis.common.investigation import upstream_headers
@@ -37,7 +38,8 @@ def default_classification(annotations: dict) -> dict:
 
 
 async def list_upstream_tools(c: ControlContext, url: str, server_id: str = "") -> list[dict]:
-    response = await c.http.post(url, headers={**MCP_HEADERS, **upstream_headers(c.settings, server_id, url)},
+    response = await c.http.post(url, headers={**MCP_HEADERS, **upstream_headers(c.settings, server_id, url),
+                                             **bank_headers(c.settings, server_id, url)},
                                  json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
     response.raise_for_status()
     return response.json()["result"]["tools"]
