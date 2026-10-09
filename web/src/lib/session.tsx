@@ -38,6 +38,9 @@ async function login(username: string): Promise<string> {
   return access_token;
 }
 
+// Staff personas, plus the synthetic customer Jan for the Bank Assistant demo (other customers are not offered).
+const selectable = (p: Persona) => !p.roles.includes("customer") || p.username === "jan.devries";
+
 const onCallback = () => window.location.pathname.endsWith("/auth/callback");
 
 export function SessionProvider({ children }: { children: ReactNode }) {
@@ -85,6 +88,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async (next: string) => {
       clearSsoToken();
       setSsoUser(null);
+      await queryClient.cancelQueries();
+      queryClient.clear(); // Never display the previous persona's cached customer records.
       setToken(await login(next));
       setRelogin(() => login(next).then((t) => (setToken(t), t)));
       setUsername(next);
@@ -116,7 +121,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (found.dev_login) {
         try {
           const list = await api<Persona[]>("/idp/personas");
-          const staff = list.filter((p) => !p.roles.includes("customer"));
+          const staff = list.filter(selectable);
           setPersonas(staff);
           const initial = staff.find((p) => p.username === stored() && p.status === "active") ?? staff[0];
           await switchTo(initial.username);
@@ -137,7 +142,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (ssoUser && config?.dev_login && personas.length === 0) {
       api<Persona[]>("/idp/personas")
-        .then((list) => setPersonas(list.filter((p) => !p.roles.includes("customer"))))
+        .then((list) => setPersonas(list.filter(selectable)))
         .catch(() => undefined);
     }
   }, [ssoUser, config, personas.length]);
@@ -150,7 +155,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!token || !(await adoptSsoToken(token.access_token))) throw new Error("The server did not accept the new token.");
       setNeedsSignIn(false);
       setReady(true);
-      await queryClient.invalidateQueries();
+      await queryClient.cancelQueries();
+      queryClient.clear();
       return returnTo;
     },
     [config, queryClient, adoptSsoToken],

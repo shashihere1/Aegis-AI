@@ -14,6 +14,34 @@ class Base(DeclarativeBase):
     pass
 
 
+class LlmReservation(Base):
+    """Conservative, durable budget holds; uncertain requests are deliberately not auto-released."""
+
+    __tablename__ = "llm_reservations"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(20), index=True)
+    mandate_id: Mapped[str] = mapped_column(String(40), index=True)
+    deployment: Mapped[str] = mapped_column(String(128))
+    day: Mapped[str] = mapped_column(String(10), index=True)
+    reserved_eur: Mapped[float] = mapped_column(Float)
+    charged_eur: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(20), default="reserved")
+    policy_version: Mapped[str] = mapped_column(String(64))
+    policy_snapshot: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AgentRun(Base):
+    """Display/history record, never a store for bearer tokens or resumable credentials."""
+
+    __tablename__ = "agent_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(30))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Agent(Base):
     __tablename__ = "agents"
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
@@ -126,7 +154,8 @@ class DecisionRecord(Base):
     decision: Mapped[str] = mapped_column(String(20), index=True)
     obligations: Mapped[list] = mapped_column(JSON, default=list)
     reasons: Mapped[list] = mapped_column(JSON, default=list)
-    policy_version: Mapped[str] = mapped_column(String(40), default="")
+    # Tool-policy IDs and full SHA-256 model-policy fingerprints both appear in decision receipts.
+    policy_version: Mapped[str] = mapped_column(String(64), default="")
     input_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     data_class: Mapped[str | None] = mapped_column(String(16), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

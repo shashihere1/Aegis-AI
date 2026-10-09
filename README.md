@@ -172,7 +172,35 @@ scene-by-scene flow.
 | Database | Persistent PostgreSQL for `serve`; SQLite only for tests/narration/explicit `--ephemeral` | Managed PostgreSQL, migration/backup/retention procedures still required |
 | Hot store | In-memory | Valkey (`ValkeyHotStore`, extra `valkey`) |
 | Signing keys | Persisted in protected `.local/keys` for the PostgreSQL console; ephemeral in unit tests | Azure Key Vault |
-| LLM | Deterministic fake endpoint (`demo/aegis_demo/fake_llm.py`) | OneStop-approved Azure OpenAI (`AEGIS_AZURE_OPENAI_*`) |
+| LLM | Offline fake by default; configured Azure uses a separate, bounded gateway-only client | Entra/key-vault credential integration and cloud operations remain planned |
+
+## One real Azure model call
+
+See [Azure setup and smoke-call instructions](docs/azure-openai.md). The local console can call one explicitly
+configured Azure OpenAI deployment through a fresh Ava Mandate, recording returned usage, measured latency
+and a prompt-free authorization receipt. A configured Azure failure does not fall back to the fake model.
+
+```powershell
+# Against a running console loaded with the updated code and Azure settings:
+.\.venv\Scripts\python -m aegis_demo.llm_smoke --check   # configuration only; no Azure call
+.\.venv\Scripts\python -m aegis_demo.llm_smoke --call    # one explicit, paid synthetic inference request
+```
+
+The command never starts/restarts the console or asks for its Azure key. The server automatically reads
+repository-root `.env` and `.env.local`; process environment variables take priority. Use `.env.azure.example`
+as an Azure-only template, and keep actual keys in Git-ignored local files or server environment variables,
+not in source or command-line arguments. The narrated demo and Studio scenes remain scripted/offline.
+The smoke call checks inference only. For actual framework execution, use the separate
+[live Bank Assistant](docs/live-agents.md), with installed agent extras and explicit model-processing controls.
+
+## Live Bank Assistant
+
+Open `/ui/assistant`, act as synthetic customer Jan, select a purpose and authorize paid synthetic inference.
+Ava uses a real LangGraph graph with Azure-selected tools. KYC uses a real Microsoft Agent Framework workflow.
+Transfers and address changes pause for exact-argument confirmation; policy-driven risk approval remains separate.
+Model deployment, declared processing geography, data ceiling and per-agent daily estimated budgets are enforced
+in Python. Run histories and budget reservations persist in PostgreSQL. OPA and enterprise IAM remain separate work.
+See [configuration, launch commands, demonstration and limitations](docs/live-agents.md).
 
 ## API (selection)
 
@@ -234,8 +262,9 @@ narrated run: [`docs/test-evidence/demo-run.txt`](docs/test-evidence/demo-run.tx
 ## Responsible AI, security and limitations
 
 See [`SECURITY.md`](SECURITY.md). Known limitations: the dev IdP has no passwords (switch it off with `AEGIS_ENABLE_DEV_LOGIN=false`); SSO has been tested only against a fake provider and the built-in one, not a live Keycloak/Entra tenant; the Python policy engine
-must be kept in step with the Rego (conformance tests); scripted planners stand in for LLM planning in the
-demo; governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; agent-identity
+must be kept in step with the Rego (conformance tests); Studio scenes remain scripted, while the optional
+[Bank Assistant](docs/live-agents.md) uses real LangGraph/Azure planning and a Microsoft Agent Framework KYC workflow;
+governed editing is limited to supported Python-PDP configuration, not arbitrary Rego; agent-identity
 provisioning in Keycloak/Entra, managed OPA publishing and Azure deployment are not built yet. Adaptive risk is an explainable
 statistical baseline, not a trained model. Single-process hot-store state and mock-bank effects remain volatile;
 governance and evidence records now persist in PostgreSQL.

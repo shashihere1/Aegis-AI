@@ -50,6 +50,12 @@ class RateLimited(AegisDenied):
     pass
 
 
+class LlmCallError(AegisDenied):
+    def __init__(self, status_code: int, code: str, message: str):
+        super().__init__(message, [{"rule": code, "message": message}])
+        self.status_code, self.code = status_code, code
+
+
 class AegisAgent:
     def __init__(
         self,
@@ -142,6 +148,7 @@ class Task:
         self.token = token
         self.claims = jwt.decode(token, options={"verify_signature": False})
         self.trace_headers = current_trace_headers()
+        self.last_chat_metadata: dict[str, str] = {}
 
     @property
     def mandate_id(self) -> str:
@@ -219,14 +226,39 @@ class Task:
         return payload["result"]
 
     async def chat(self, messages: list[dict], **kwargs) -> dict:
+        self.last_chat_metadata = {}
         response = await self.agent.http.post(
             f"{self.agent.gateway_url}/llm/v1/chat/completions",
             json={"messages": messages, **kwargs},
             headers=self._auth(),
         )
         if response.status_code != 200:
-            raise AegisDenied(response.text)
+            try:
+                error = response.json().get("error", {})
+            except ValueError, AttributeError:
+                error = {}
+            if not isinstance(error, dict):
+                error = {"message": str(error)}
+            raise LlmCallError(
+                response.status_code,
+                error.get("code", "llm_denied"),
+                error.get("message", "The gateway refused the model request."),
+            )
+        self.last_chat_metadata = {
+            name: response.headers[name]
+            for name in (
+                "x-aegis-llm-provider",
+                "x-aegis-llm-deployment",
+                "x-aegis-azure-request-id",
+                "x-aegis-llm-latency-ms",
+                "x-aegis-llm-estimated-cost-eur",
+                "x-aegis-trace-id",
+            )
+            if name in response.headers
+        }
         return response.json()
 
     async def complete(self) -> None:
-        await self.agent.http.post(f"{self.agent.control_url}/v1/mandates/complete", headers=self._auth())
+        response = await self.agent.http.post(f"{self.agent.control_url}/v1/mandates/complete", headers=self._auth())
+        if response.status_code != 200:
+            raise AegisDenied("The control plane could not complete this task; inspect its Mandate status.")

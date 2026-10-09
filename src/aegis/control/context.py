@@ -1,5 +1,6 @@
+import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ class ControlContext:
     oidc: OidcVerifier | None = None
     builtin_oidc: Any = None  # the demo-only OIDC provider, when enabled
     telemetry: Any = None
+    llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
     def sts_issuer(self) -> str:
