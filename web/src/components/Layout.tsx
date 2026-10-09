@@ -20,6 +20,7 @@ import {
   MonitorDot,
   Moon,
   Plug,
+  Repeat,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -239,6 +240,15 @@ function PersonaSwitcher() {
             </button>
           ))}
           {sso && <div className="my-1 border-t border-line" />}
+          {sso && config?.oidc && (
+            <button
+              role="menuitem"
+              onClick={() => void signIn(window.location.pathname.replace(/^\/ui/, "") || "/")}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-hover"
+            >
+              <Repeat className="size-4 text-accent" /> Switch account (sign in as another role)
+            </button>
+          )}
           {sso && (
             <button role="menuitem" onClick={signOut} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-hover">
               <LogOut className="size-4 text-muted" /> Sign out

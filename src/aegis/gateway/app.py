@@ -9,6 +9,7 @@ forwarded upstream: upstream credentials are brokered by the Gateway.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -16,9 +17,11 @@ from contextlib import asynccontextmanager
 import httpx
 import jwt
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from opentelemetry import trace
 
+from aegis.common.crypto import SigningKey
 from aegis.common.hashing import action_hash, tool_definition_hash
 from aegis.common.investigation import ENTITLEMENT, SERVER, upstream_headers
 from aegis.common.settings import Settings
@@ -27,8 +30,12 @@ from aegis.gateway.llm import AzureChatUpstream, LlmError, bounded_chat, complet
 from aegis.guard import pii
 from aegis.guard.detectors import scan_text
 from aegis.hotstore import HotStore
+from aegis.policy.arguments import argument_problem, refuse_arguments
 from aegis.policy.engine import PolicyEngine
+from aegis.policy.engines import fail_closed, normalize
 from aegis.telemetry import tracing_headers
+
+log = logging.getLogger("aegis.gateway")
 
 MCP_HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
 DENIED, APPROVAL_PENDING, RATE_LIMITED = -32001, -32002, -32003
@@ -72,10 +79,18 @@ def trace_id() -> str | None:
 
 
 def create_gateway(
-    settings: Settings, http: httpx.AsyncClient, hotstore: HotStore, engine: PolicyEngine, telemetry=None
+    settings: Settings,
+    http: httpx.AsyncClient,
+    hotstore: HotStore,
+    engine: PolicyEngine,
+    telemetry=None,
+    service_key: SigningKey | None = None,
 ) -> FastAPI:
     tracer = telemetry.tracer("aegis.gateway") if telemetry else trace.get_tracer("aegis.gateway")
     azure = AzureChatUpstream(settings) if settings.azure_openai_endpoint else None
+    # The Gateway's own identity for control-plane calls. Ephemeral if unset (local dev); its public half
+    # is handed to the control plane out of band. In Azure the private key is a Key Vault reference.
+    service_key = service_key or SigningKey.load_or_generate(settings.gateway_service_key_path, "gw-svc-1")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -86,8 +101,17 @@ def create_gateway(
                 await azure.aclose()
 
     app = FastAPI(title="Aegis Gateway (PEP)", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        max_age=600,
+    )
     app.state.azure_upstream = azure
-    cp = ControlPlaneClient(http, settings.control_url, settings.internal_token, settings.cache_seconds)
+    app.state.service_key = service_key
+    cp = ControlPlaneClient(http, settings.control_url, service_key, settings.cache_seconds)
     gw = settings.gateway_url.rstrip("/")
     upstream_cache: dict[str, tuple[float, dict[str, str]]] = {}
 
@@ -351,7 +375,19 @@ def create_gateway(
                 "approval": approval_ctx,
             },
         }
-        verdict = await engine.evaluate(policy_input)
+        problem = argument_problem(arguments)
+        if problem:  # refused before any engine sees them; recorded like every other deny
+            verdict = refuse_arguments(getattr(engine, "version", ""), problem)
+        else:
+            try:
+                raw = await engine.evaluate(policy_input)
+                # Keep the version the engine stamped: engine.version is shared and may already name a newer version
+                # activated while this decision was being made.
+                stamped = raw.get("policy_version") if isinstance(raw, dict) else None
+                verdict = normalize(raw, stamped or getattr(engine, "version", ""))
+            except Exception as exc:  # fail closed, and keep the evidence (the deny below is recorded)
+                log.error("policy decision point failed for %s: %s", tool_id, exc)
+                verdict = fail_closed(getattr(engine, "version", ""), exc)
         span.set_attributes(
             {
                 "aegis.decision": verdict["decision"],
@@ -702,6 +738,6 @@ def create_gateway(
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "policy_version": engine.version}
+        return {"status": "ok", "policy_version": engine.version, "policy_engine": settings.policy_engine}
 
     return app

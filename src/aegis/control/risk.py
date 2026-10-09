@@ -61,7 +61,8 @@ async def compute(s, agent: Agent) -> AgentRisk:
         signals.append({"reason": "Call-rate deviation from observed baseline", "points": 15})
     if new_tools:
         signals.append({"reason": "First-time tools relative to observed history", "points": 5})
-    inherent = min(40, max(0, agent.inherent_risk))
+    # The registry's inherent score is 0-100; it supplies at most 40 of the 100 points here (behaviour 40, posture 20).
+    inherent = round(min(100, max(0, agent.inherent_risk)) * 0.4)
     behavioural = min(40, round(sum(signal["points"] for signal in signals)))
     posture = min(
         20, (15 if agent.orphaned else 0) + (10 if agent.attestation_due and aware(agent.attestation_due) < now else 0)

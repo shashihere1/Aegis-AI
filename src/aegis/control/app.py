@@ -2,10 +2,12 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from aegis import telemetry
@@ -50,19 +52,29 @@ def create_app(
     http: httpx.AsyncClient,
     hotstore: HotStore | None = None,
     agent_identity: AgentIdentityProvider | None = None,
+    gateway_service_public_pem: str = "",
 ) -> FastAPI:
     context = ControlContext(
         settings=settings,
         db=Database(settings.database_url, settings.database_schema),
         idp=idp_module.DevIdp(
             f"{settings.control_url}/idp",
-            SigningKey.load_or_generate(settings.idp_key_path, "idp-1"),
+            SigningKey.ensure(settings.idp_key_path, "idp-1"),
             settings.identity_state_dir,
         ),
-        sts_key=SigningKey.load_or_generate(settings.signing_key_path, "sts-1"),
+        sts_key=SigningKey.ensure(settings.signing_key_path, "sts-1"),
         hotstore=hotstore or make_hotstore(settings.hotstore_url),
         http=http,
         taxonomy=load_taxonomy(),
+    )
+    # Public-key fingerprints only (never the private key). Persistent keys keep the same fingerprint
+    # across restarts; an ephemeral one changes every start, which is the signal it is dev-only.
+    log.info(
+        "signing keys ready: sts fingerprint=%s (%s), idp fingerprint=%s (%s)",
+        context.sts_key.fingerprint,
+        "persistent" if settings.signing_key_path else "ephemeral",
+        context.idp.key.fingerprint,
+        "persistent" if settings.idp_key_path else "ephemeral",
     )
     oidc_config = OidcConfig.from_settings(settings)
     own_http: httpx.AsyncClient | None = None
@@ -78,6 +90,13 @@ def create_app(
     agent_http = network_client(settings.keycloak_url) if use_keycloak else None
     context.agent_identity = agent_identity or build_agent_identity(settings, context.idp, agent_http)
     context.telemetry = telemetry.Telemetry(context.db)
+    # The Gateway authenticates its internal calls by signing with its private key; we verify with the
+    # public half only (no shared secret). Supplied in-process in the demo, or loaded from a PEM in Azure.
+    context.gateway_service_public_pem = gateway_service_public_pem or (
+        Path(settings.gateway_service_public_key_path).read_text(encoding="utf-8")
+        if settings.gateway_service_public_key_path
+        else ""
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -123,6 +142,14 @@ def create_app(
     ):
         app.include_router(module.router())
     app.add_middleware(telemetry.TraceMiddleware, telemetry=context.telemetry, service="aegis.control")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        max_age=600,
+    )
 
     @app.exception_handler(IdentityUnavailable)
     async def identity_unavailable(request: Request, exc: IdentityUnavailable):

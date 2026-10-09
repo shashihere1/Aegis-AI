@@ -30,6 +30,7 @@ class ControlContext:
     agent_identity: Any = None  # AgentIdentityProvider: where each agent's own identity lives
     builtin_oidc: Any = None  # the demo-only OIDC provider, when enabled
     telemetry: Any = None
+    gateway_service_public_pem: str = ""  # Gateway's public key, to authenticate its internal calls
     llm_budget_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property

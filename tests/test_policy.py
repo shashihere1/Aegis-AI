@@ -1,111 +1,139 @@
-"""PDP rules. The same cases run against OPA (the authoritative Rego) when an `opa` binary is available."""
+"""PDP rules. The shared cases (tests/policy_cases.py) run through every engine:
 
-import copy
+- the Python mirror,
+- the authoritative Rego in-process via regopy (always, when regopy is installed),
+- the same Rego in a real OPA (`opa eval`, `opa test`, `opa check`) when an OPA binary is available - as in CI.
+"""
+
 import json
-import shutil
 import subprocess
 
 import pytest
+from policy_cases import (
+    CASES,
+    POLICY_DIR,
+    REGO_STRICTER,
+    REGO_TEST_FILE,
+    expected_obligation_types,
+    python_inputs,
+    render_rego_tests,
+)
 
-from aegis.common.settings import REPO_ROOT
 from aegis.policy.engine import PythonEngine
+from aegis.policy.engines import normalize, rego_available
+from aegis_demo.opa_setup import find_binary
 
-POLICY_DIR = str(REPO_ROOT / "config" / "policies")
 ENGINE = PythonEngine(POLICY_DIR)
-
-BASE = {
-    "subject": {"type": "agent", "id": "AGT-1", "properties": {"status": "active", "risk_tier": "medium",
-                                                                "env": "PRD", "autonomy": "L1"}},
-    "action": {"name": "tools/call", "properties": {"tool": "kyc.verify_document", "args": {}}},
-    "resource": {"type": "mcp_tool", "id": "kyc.verify_document", "properties": {
-        "intent_tags": ["customer.kyc.verify"], "side_effect": "write", "egress": "none",
-        "returns_data_class": "confidential", "rate_limit_per_min": None, "untrusted_content": False,
-        "required_entitlement": "own_kyc", "status": "approved", "pinned": True}},
-    "context": {
-        "user": {"id": "user:jan"},
-        "mandate": {"id": "mdt_1", "scopes": ["kyc.verify_document"], "intent_categories": ["customer.kyc.verify"],
-                    "max_data_class": "confidential", "entitlements": ["own_kyc"], "chain": ["AGT-1"], "depth": 0},
-        "session": {"tainted": False, "max_data_class_read": "public", "external_egress": False},
-        "approval": None,
-    },
-}
+needs_rego = pytest.mark.skipif(not rego_available(), reason="regopy not installed")
+OPA = find_binary()
+needs_opa = pytest.mark.skipif(OPA is None, reason="no OPA binary (set AEGIS_OPA_BINARY; CI installs one)")
 
 
-def case(**changes):
-    value = copy.deepcopy(BASE)
-    for path, new in changes.items():
-        target = value
-        keys = path.split("__")
-        for key in keys[:-1]:
-            target = target[key]
-        target[keys[-1]] = new
-    return value
+def python_result(policy_input: dict) -> dict:
+    clean, data = python_inputs(policy_input)
+    return normalize(PythonEngine(POLICY_DIR, data).decide(clean), "v")
 
 
-TRANSFER = dict(
-    action__properties={"tool": "payments.initiate_transfer",
-                        "args": {"amount": 25000, "new_beneficiary": True}},
-    resource__properties={"intent_tags": ["payments.transfer.initiate"], "side_effect": "financial",
-                          "egress": "internal", "returns_data_class": "confidential", "rate_limit_per_min": 5,
-                          "required_entitlement": None, "status": "approved", "pinned": True},
-    context__mandate={"id": "mdt_2", "scopes": ["payments.initiate_transfer"],
-                      "intent_categories": ["payments.transfer.initiate"], "max_data_class": "confidential",
-                      "entitlements": [], "chain": ["AGT-1"], "depth": 1},
-)
-EMAIL = dict(
-    action__properties={"tool": "notify.send_email", "args": {"to": "x@evil.example"}},
-    resource__properties={"intent_tags": ["comms.external.send"], "side_effect": "write", "egress": "external",
-                          "returns_data_class": "internal", "rate_limit_per_min": None,
-                          "required_entitlement": None, "status": "approved", "pinned": True},
-    context__mandate={"id": "mdt_3", "scopes": ["notify.send_email"], "intent_categories": ["comms.external.send"],
-                      "max_data_class": "confidential", "entitlements": [], "chain": ["AGT-1"], "depth": 0},
-)
-
-CASES = {
-    "allow_with_redaction": (case(), "allow", set()),
-    "inactive_agent": (case(subject__properties={"status": "suspended", "risk_tier": "medium", "env": "PRD"}),
-                       "deny", {"AGT-001"}),
-    "outside_scope_and_purpose": (case(context__mandate={**BASE["context"]["mandate"], "scopes": [],
-                                                          "intent_categories": ["payments.transfer.initiate"]}),
-                                  "deny", {"SCP-001", "PUR-001"}),
-    "missing_entitlement": (case(context__mandate={**BASE["context"]["mandate"], "entitlements": []}),
-                            "deny", {"ENT-001"}),
-    "above_data_ceiling": (case(context__mandate={**BASE["context"]["mandate"], "max_data_class": "internal"}),
-                           "deny", {"DAT-001"}),
-    "unpinned_tool": (case(resource__properties={**BASE["resource"]["properties"], "pinned": False}),
-                      "deny", {"TOOL-001"}),
-    "high_value_transfer": (case(**TRANSFER), "require_approval", {"PAY-010"}),
-    "approved_transfer": (case(**TRANSFER, context__approval={"status": "approved"}), "allow", set()),
-    "mismatched_approval": (case(**TRANSFER, context__approval={"status": "mismatch"}), "deny", {"APR-001"}),
-    "clean_egress": (case(**EMAIL), "allow", set()),
-    "lethal_trifecta": (case(**EMAIL, context__session={"tainted": True, "max_data_class_read": "confidential",
-                                                        "external_egress": False}), "deny", {"IFC-001"}),
-}
+def comparable(result: dict) -> dict:
+    """Engines may return numbers as 5 or 5.0 and sets in any order; compare what they mean."""
+    return json.loads(json.dumps({k: v for k, v in normalize(result, "v").items() if k != "policy_version"}))
 
 
 @pytest.mark.parametrize("name", CASES)
 def test_python_engine(name):
     policy_input, expected, rules = CASES[name]
-    result = ENGINE.decide(policy_input)
+    result = python_result(policy_input)
     assert result["decision"] == expected
     assert {r["rule"] for r in result["reasons"]} == rules
 
 
 def test_obligations():
-    result = ENGINE.decide(case(**TRANSFER, context__approval={"status": "approved"}))
-    types = {o["type"] for o in result["obligations"]}
-    assert types == {"redact", "rate_limit"}
+    result = ENGINE.decide(python_inputs(CASES["approved_transfer"][0])[0])
+    assert {o["type"] for o in result["obligations"]} == {"redact", "rate_limit"}
     assert result["policy_version"].startswith("rego-")
 
 
-@pytest.mark.skipif(shutil.which("opa") is None, reason="OPA binary not installed (runs in CI / Azure)")
+@needs_rego
 @pytest.mark.parametrize("name", CASES)
-def test_rego_matches_python_engine(name, tmp_path):
+def test_rego_engine_matches_python_exactly(name):
+    from aegis.policy.engines import RegoEngine
+
     policy_input, expected, rules = CASES[name]
+    clean, data = python_inputs(policy_input)
+    rego = RegoEngine(POLICY_DIR, data).decide(clean)  # the engine injects the governed data itself
+    assert rego["decision"] == expected and {r["rule"] for r in rego["reasons"]} == rules
+    assert comparable(rego) == comparable(python_result(policy_input))  # reasons, messages and obligations too
+
+
+@needs_rego
+@pytest.mark.parametrize("name", REGO_STRICTER)
+def test_rego_refuses_malformed_or_hostile_input(name):
+    from aegis.policy.engines import RegoEngine
+
+    policy_input, rules = REGO_STRICTER[name]
+    rego = RegoEngine(POLICY_DIR).decide(policy_input)
+    assert rego["decision"] == "deny" and rules <= {r["rule"] for r in rego["reasons"]}
+
+
+def test_amount_given_as_text_cannot_skip_approval_in_any_engine():
+    hostile = REGO_STRICTER["transfer_amount_as_text"][0]
+    assert python_result(hostile)["decision"] in {"deny", "require_approval"}  # Python coerces "25000" -> approval
+    if rego_available():
+        from aegis.policy.engines import RegoEngine
+
+        assert RegoEngine(POLICY_DIR).decide(hostile)["decision"] == "deny"  # Rego refuses outright (ARG-001)
+
+
+def test_generated_rego_unit_tests_are_up_to_date():
+    assert REGO_TEST_FILE.read_text(encoding="utf-8") == render_rego_tests(expected_obligation_types()), (
+        "config/policies/tool_call_test.rego is stale: run  python tests/policy_cases.py --write"
+    )
+
+
+@needs_rego
+def test_generated_rego_unit_tests_parse():
+    import regopy
+
+    interpreter = regopy.Interpreter()
+    interpreter.add_module("tool_call", (REGO_TEST_FILE.parent / "tool_call.rego").read_text(encoding="utf-8"))
+    interpreter.add_module("tool_call_test", REGO_TEST_FILE.read_text(encoding="utf-8"))  # raises on a syntax error
+
+
+# ---- real OPA (runs wherever a binary is available, e.g. CI) -------------------------------------
+
+
+def opa_eval(policy_input: dict, tmp_path) -> dict:
     input_file = tmp_path / "input.json"
     input_file.write_text(json.dumps(policy_input))
-    out = subprocess.run(["opa", "eval", "-f", "json", "-d", POLICY_DIR, "-i", str(input_file),
-                          "data.aegis.tool_call.decision"], capture_output=True, text=True, check=True)
-    result = json.loads(out.stdout)["result"][0]["expressions"][0]["value"]
-    assert result["decision"] == expected
-    assert {r["rule"] for r in result["reasons"]} == rules
+    out = subprocess.run(
+        [OPA, "eval", "-f", "json", "-d", POLICY_DIR, "-i", str(input_file), "data.aegis.tool_call.decision"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(out.stdout)["result"][0]["expressions"][0]["value"]
+
+
+@needs_opa
+@pytest.mark.parametrize("name", CASES)
+def test_opa_matches_python_exactly(name, tmp_path):
+    policy_input, expected, rules = CASES[name]
+    result = opa_eval(policy_input, tmp_path)
+    assert result["decision"] == expected and {r["rule"] for r in result["reasons"]} == rules
+    assert comparable(result) == comparable(python_result(policy_input))
+
+
+@needs_opa
+@pytest.mark.parametrize("name", REGO_STRICTER)
+def test_opa_refuses_malformed_or_hostile_input(name, tmp_path):
+    policy_input, rules = REGO_STRICTER[name]
+    result = opa_eval(policy_input, tmp_path)
+    assert result["decision"] == "deny" and rules <= {r["rule"] for r in result["reasons"]}
+
+
+@needs_opa
+def test_opa_check_and_unit_tests_pass():
+    check = subprocess.run([OPA, "check", POLICY_DIR], capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    unit = subprocess.run([OPA, "test", POLICY_DIR, "-v"], capture_output=True, text=True)
+    assert unit.returncode == 0, unit.stdout + unit.stderr

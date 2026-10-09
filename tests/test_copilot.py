@@ -105,7 +105,7 @@ async def test_anonymous_and_direct_upstream_are_blocked(world):
     assert (await world.http.get(f"{BASE}/demo/api/copilot/status")).status_code == 401
     for headers in (
         {},
-        {"x-aegis-internal": world.settings.internal_token},
+        world.internal_headers(),
         {"authorization": f"Bearer {world.token('mark.jansen')}"},
     ):
         response = await world.http.post(

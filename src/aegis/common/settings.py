@@ -30,8 +30,12 @@ class Settings(BaseModel):
     idp_key_path: str = ""
     identity_state_dir: str = ""  # local development identities; never a production secret store
 
-    policy_engine: str = "python"  # "python" (in-process) or "opa" (OPA sidecar REST API)
+    # python: in-process mirror of the Rego. rego: the Rego itself, in-process via regopy (no binary needed).
+    # opa: the Rego in an OPA server (AEGIS_OPA_URL); Aegis checks the server runs exactly the approved Rego.
+    policy_engine: Literal["python", "rego", "opa"] = "python"
     opa_url: str = "http://localhost:8181"
+    opa_timeout_seconds: float = Field(default=2.0, gt=0, le=30)  # whole request; a slow OPA fails closed
+    opa_token: str = Field(default="", repr=False)  # bearer token for an authenticating proxy in front of OPA
     policy_dir: str = str(REPO_ROOT / "config" / "policies")
 
     hotstore_url: str = ""  # "redis://..." for Valkey; empty -> in-memory (single process only)
@@ -53,6 +57,9 @@ class Settings(BaseModel):
     # Empty = provider roles are used as Aegis roles unchanged. Non-empty = only mapped roles are granted.
     oidc_role_map: str = ""
     oidc_scopes: str = "openid profile email"
+    # Separation of duties by identity: refuse any login that holds more than one Aegis role. A person who acts in
+    # several roles uses a separate account for each (see keycloak_setup `accounts`).
+    oidc_one_role_per_account: bool = False
     oidc_clock_skew: int = 60
     # Comma-separated callback URLs the console may use (built-in provider only; real providers hold their own).
     oidc_redirect_uris: str = (
@@ -80,10 +87,24 @@ class Settings(BaseModel):
     approval_hold_seconds: float = 0.0  # how long the gateway holds a call waiting for approval
     auto_suspend_on_critical: bool = True
 
-    # Shared secret for gateway -> control-plane internal calls (Key Vault reference in Azure).
-    internal_token: str = Field(default="dev-internal-token", repr=False)
     # One-process demo shares this random capability. Separate services must configure a protected shared value.
     investigation_token: str = Field(default_factory=lambda: secrets.token_urlsafe(32), repr=False, min_length=32)
+
+    # Gateway → control-plane service identity (asymmetric; no shared secret).
+    # The Gateway signs each internal call with its private ES256 key; the control plane verifies with
+    # the public half only, so it cannot forge Gateway tokens. Private key in Key Vault in Azure.
+    # Both empty in local single-process mode: an ephemeral key pair is generated and wired in-process.
+    gateway_service_key_path: str = ""  # Gateway side: the private signing key (PEM).
+    gateway_service_public_key_path: str = ""  # Control side: the Gateway's public key (PEM) to verify.
+
+    # CORS: comma-separated origins the browser console is served from.
+    # In production set this to the exact frontend URL (no trailing slash, no wildcards).
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000"
+
+    # TLS: paths to a PEM certificate and private key for direct uvicorn TLS termination.
+    # Leave empty when TLS is handled by a reverse proxy or Azure Container Apps ingress (recommended).
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
 
     # Gateway caches (seconds). 0 disables caching, which tests use for determinism.
     cache_seconds: float = 2.0

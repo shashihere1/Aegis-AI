@@ -30,6 +30,6 @@ Explicit disposable mode: `python -m aegis_demo.serve --ephemeral`. This uses in
 default persistence path. The Azure deployment below is still planned, not implemented.
 
 **Next increment (plan §16):** Azure Container Apps in the team's Makeathon sandbox — control plane, Gateway with
-an OPA sidecar, PostgreSQL Flexible Server, a Valkey container, Key Vault for signing keys, and the
+an OPA sidecar (start it with the same Rego; Aegis checks the loaded modules match the approved Rego), PostgreSQL Flexible Server, a Valkey container, Key Vault for signing keys, and the
 OneStop-approved Azure OpenAI deployment. Images are built through the approved Artifactory route.
 Bicep / `azd` templates will live in `deployment/azure/`.
