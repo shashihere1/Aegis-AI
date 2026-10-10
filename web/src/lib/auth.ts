@@ -21,7 +21,10 @@ export interface AuthConfig {
 interface StoredToken {
   access_token: string;
   id_token?: string;
+  refresh_token?: string;
   expires_at: number; // epoch ms
+  /** Signed in with the console's own username + password form (no provider browser session to end). */
+  via?: "password";
 }
 
 interface Pending {
@@ -67,6 +70,96 @@ export function storedSsoToken(): StoredToken | null {
 }
 
 export const clearSsoToken = () => write(TOKEN_KEY, null);
+
+/** True when the stored session came from the username + password form. */
+export const signedInWithPassword = () => read<StoredToken>(TOKEN_KEY)?.via === "password";
+
+/** The stored session even if its access token has expired (a refresh token may still renew it). */
+export const hasStoredSession = () => !!read<StoredToken>(TOKEN_KEY)?.refresh_token;
+
+interface TokenBody {
+  access_token?: string;
+  id_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+}
+
+async function tokenRequest(config: SsoConfig, form: Record<string, string>): Promise<{ ok: boolean; body: TokenBody }> {
+  let response: Response;
+  try {
+    response = await fetch(config.token_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: config.client_id, ...form }),
+    });
+  } catch {
+    throw new Error(`Could not reach the identity provider at ${new URL(config.token_endpoint).host}. Is Keycloak running?`);
+  }
+  return { ok: response.ok, body: (await response.json().catch(() => ({}))) as TokenBody };
+}
+
+/** A readable reason for a refused password sign-in. */
+function passwordProblem(body: TokenBody): string {
+  const detail = (body.error_description ?? "").toLowerCase();
+  if (body.error === "invalid_grant") {
+    if (detail.includes("disabled")) return "This account is disabled.";
+    if (detail.includes("not fully set up")) return "This account still needs setup in the identity provider before it can sign in.";
+    return "Incorrect username or password.";
+  }
+  if (body.error === "unauthorized_client") return "Password sign-in is not enabled on the identity provider. An administrator can turn it on with: python -m aegis_demo.keycloak_setup enable-password-login";
+  return body.error_description || "The identity provider refused the sign-in.";
+}
+
+/**
+ * Sign in with a username and password typed into the console. The password goes straight to the identity
+ * provider's token endpoint (never to the Aegis API) and the console keeps only the resulting tokens.
+ */
+export async function passwordSignIn(config: SsoConfig, username: string, password: string): Promise<void> {
+  const { ok, body } = await tokenRequest(config, { grant_type: "password", username, password, scope: config.scopes });
+  if (!ok || !body.access_token) throw new Error(passwordProblem(body));
+  write(TOKEN_KEY, {
+    access_token: body.access_token,
+    id_token: body.id_token,
+    refresh_token: body.refresh_token,
+    expires_at: Date.now() + (body.expires_in ?? 300) * 1000,
+    via: "password",
+  } satisfies StoredToken);
+}
+
+/** Trade the stored refresh token for a fresh access token. Resolves to it, or null when the session is over. */
+export async function refreshSession(config: SsoConfig): Promise<string | null> {
+  const stored = read<StoredToken>(TOKEN_KEY);
+  if (!stored?.refresh_token) return null;
+  try {
+    const { ok, body } = await tokenRequest(config, { grant_type: "refresh_token", refresh_token: stored.refresh_token });
+    if (!ok || !body.access_token) return null;
+    write(TOKEN_KEY, {
+      ...stored,
+      access_token: body.access_token,
+      id_token: body.id_token ?? stored.id_token,
+      refresh_token: body.refresh_token ?? stored.refresh_token,
+      expires_at: Date.now() + (body.expires_in ?? 300) * 1000,
+    } satisfies StoredToken);
+    return body.access_token;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign out of a password session: end it at the provider in the background, then forget the tokens. No redirect. */
+export function localSignOut(config: SsoConfig | null) {
+  const stored = read<StoredToken>(TOKEN_KEY);
+  clearSsoToken();
+  if (config?.end_session_endpoint && stored?.refresh_token) {
+    void fetch(config.end_session_endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: config.client_id, refresh_token: stored.refresh_token }),
+    }).catch(() => undefined); // best effort: the tokens are gone from this tab either way
+  }
+}
 
 export async function startSignIn(config: SsoConfig, returnTo = "/"): Promise<void> {
   if (!crypto.subtle) throw new Error("Sign-in needs a secure context: open the console on localhost or over HTTPS.");

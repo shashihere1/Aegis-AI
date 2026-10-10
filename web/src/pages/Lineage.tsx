@@ -5,9 +5,9 @@ import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edg
 import "@xyflow/react/dist/style.css";
 import { BadgeCheck, Ban, Bot, Database, Flag, GitFork, User, Wrench, X, type LucideIcon } from "lucide-react";
 import { api } from "../lib/api";
-import { personLabel, timeAgo } from "../lib/format";
+import { personLabel, timeAgo, titleCase } from "../lib/format";
 import type { CallOutcome, Decision, Lineage, LineageEdge, LineageNode, Task, TaskOutcome } from "../lib/types";
-import { Card, Chip, DECISIONS, EmptyState, Loading, PageHeader, Pill, StatusPill, Tabs, cx } from "../components/ui";
+import { Badge, Button, Callout, Card, Chip, DECISIONS, EmptyState, ErrorState, FilterSelect, Loading, PageHeader, SkeletonRows, StatusPill, Tabs, cx, focusRing } from "../components/ui";
 import { DecisionTable } from "./Activity";
 import { TraceWaterfall } from "../components/TraceWaterfall";
 
@@ -16,22 +16,13 @@ type Tone = "good" | "warning" | "serious" | "critical" | "neutral" | "info";
 
 const HOURS = 24;
 
-const KIND: Record<LineageNode["kind"], { icon: LucideIcon; ring: string; caption: string }> = {
-  user: { icon: User, ring: "border-series/50", caption: "Initiating user" },
-  agent: { icon: Bot, ring: "border-accent/50", caption: "Agent" },
-  tool: { icon: Wrench, ring: "border-line-strong", caption: "Tool call" },
-  data: { icon: Database, ring: "border-warning/50", caption: "Data read" },
-  approval: { icon: BadgeCheck, ring: "border-warning/50", caption: "Human approval" },
-  result: { icon: Flag, ring: "border-line-strong", caption: "Result" },
-};
-
-const RING: Record<Tone, string> = {
-  good: "border-good/60",
-  warning: "border-warning/60",
-  serious: "border-serious/60",
-  critical: "border-critical/60",
-  neutral: "border-line-strong",
-  info: "border-accent/50",
+const KIND: Record<LineageNode["kind"], { icon: LucideIcon; caption: string }> = {
+  user: { icon: User, caption: "Initiating user" },
+  agent: { icon: Bot, caption: "Agent" },
+  tool: { icon: Wrench, caption: "Tool call" },
+  data: { icon: Database, caption: "Data read" },
+  approval: { icon: BadgeCheck, caption: "Human approval" },
+  result: { icon: Flag, caption: "Result" },
 };
 
 const CALL: Record<CallOutcome, { tone: Tone; label: string }> = {
@@ -76,35 +67,44 @@ function FlowNode({ data }: NodeProps) {
   const tone = nodeTone(n);
   const verdict = n.verdict ? DECISIONS[n.verdict] : undefined;
   const call = n.kind === "tool" && !n.aggregate && n.outcome ? CALL[n.outcome as CallOutcome] : undefined;
+  // Status always carries a text label; the border only turns critical for a blocked call.
+  const statusLabel = n.kind === "result" && n.outcome ? titleCase(n.outcome) : n.kind === "approval" ? titleCase(n.approval_status ?? "pending") : undefined;
+  const showBlocked = n.blocked && !verdict;
   return (
-    <div className={cx("rounded-xl border-2 bg-card px-3 py-2.5 shadow-lg", n.kind === "result" ? "w-60" : "w-48", n.blocked ? "border-critical/60" : tone ? RING[tone] : k.ring)}>
-      <Handle type="target" position={Position.Left} className="!size-2 !border-0 !bg-line-strong" />
+    <div className={cx("rounded-xl border bg-card px-3 py-2.5 shadow-card", n.kind === "result" ? "w-60" : "w-48", n.blocked ? "border-critical/50" : "border-line-strong")}>
+      <Handle type="target" position={Position.Left} className="!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-line-strong" />
       <div className="flex items-center gap-2">
-        <k.icon className={cx("size-4 shrink-0", n.blocked ? "text-critical-ink" : "text-muted")} />
+        <k.icon className={cx("size-4 shrink-0", n.blocked ? "text-critical-ink" : "text-muted")} aria-hidden />
         <div className="min-w-0">
-          <div className={cx("truncate text-sm", n.kind === "result" ? "font-semibold" : "font-medium")} title={n.label}>
+          <div className={cx("truncate text-sm text-fg", n.kind === "result" ? "font-semibold" : "font-medium")} title={n.label}>
             {n.label}
           </div>
-          <div className="text-[11px] text-faint">
+          <div className="text-2xs text-muted">
             {n.kind === "agent" && n.depth !== undefined ? (n.depth ? `delegate · depth ${n.depth}` : "orchestrator") : k.caption}
             {n.kind === "agent" && !n.aggregate && n.status && n.status !== "active" ? ` · ${n.status}` : ""}
           </div>
         </div>
       </div>
-      {n.kind === "result" && n.detail && <div className="mt-1.5 line-clamp-3 text-xs text-muted" title={n.detail}>{n.detail}</div>}
-      {n.kind === "tool" && n.aggregate && n.outcomes && <div className="mt-1.5 text-[11px] text-muted">{outcomeSummary(n.outcomes)}</div>}
-      {(verdict || call) && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {verdict && (
-            <Pill tone={verdict.tone} icon={verdict.icon}>
-              {verdict.label}
-              {n.rules?.length ? ` · ${n.rules.join(", ")}` : ""}
-            </Pill>
-          )}
-          {call && n.outcome !== "denied" && <Pill tone={call.tone}>{call.label}</Pill>}
+      {n.kind === "result" && n.detail && (
+        <div className="mt-1.5 line-clamp-3 text-xs text-muted" title={n.detail}>
+          {n.detail}
         </div>
       )}
-      <Handle type="source" position={Position.Right} className="!size-2 !border-0 !bg-line-strong" />
+      {n.kind === "tool" && n.aggregate && n.outcomes && <div className="mt-1.5 text-2xs text-muted">{outcomeSummary(n.outcomes)}</div>}
+      {(verdict || call || statusLabel || showBlocked) && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {verdict && (
+            <Badge tone={verdict.tone} icon={verdict.icon}>
+              {verdict.label}
+              {n.rules?.length ? ` · ${n.rules.join(", ")}` : ""}
+            </Badge>
+          )}
+          {call && n.outcome !== "denied" && <Badge tone={call.tone}>{call.label}</Badge>}
+          {statusLabel && <Badge tone={tone ?? "neutral"}>{statusLabel}</Badge>}
+          {showBlocked && <Badge tone="critical">Blocked</Badge>}
+        </div>
+      )}
+      <Handle type="source" position={Position.Right} className="!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-line-strong" />
     </div>
   );
 }
@@ -112,10 +112,36 @@ function FlowNode({ data }: NodeProps) {
 const nodeTypes = { aegis: FlowNode };
 
 function edgeColor(e: LineageEdge, aggregate: boolean): string {
-  if (e.kind === "resulted_in" || e.kind === "read") return "var(--line-strong)";
+  if (e.kind === "resulted_in") return "var(--line-strong)";
+  if (e.kind === "read") return "var(--muted)";
   if (e.kind === "approval") return "var(--warning)";
   const d = aggregate ? (e.decisions.deny ? "deny" : e.decisions.require_approval ? "require_approval" : e.decisions.rate_limited ? "rate_limited" : e.decision) : e.decision;
-  return d === "deny" ? "var(--critical)" : d === "require_approval" ? "var(--warning)" : d === "rate_limited" ? "var(--serious)" : "var(--accent)";
+  return d === "deny" ? "var(--critical)" : d === "require_approval" ? "var(--warning)" : d === "rate_limited" ? "var(--serious)" : "var(--series)";
+}
+
+/** Legend for edge colours and dash styles; colour is never the only cue (denied is dashed, results are dotted). */
+const EDGE_LEGEND: { key: string; label: string; color: string; dash?: string }[] = [
+  { key: "allowed", label: "Allowed or delegated", color: "var(--series)" },
+  { key: "approval", label: "Needs approval", color: "var(--warning)" },
+  { key: "rate", label: "Rate-limited", color: "var(--serious)" },
+  { key: "deny", label: "Denied (dashed)", color: "var(--critical)", dash: "6 4" },
+  { key: "read", label: "Data read", color: "var(--muted)" },
+  { key: "result", label: "Result (dotted)", color: "var(--line-strong)", dash: "3 3" },
+];
+
+function EdgeLegend() {
+  return (
+    <ul className="flex flex-wrap gap-x-4 gap-y-1 text-caption text-muted" aria-label="Edge legend">
+      {EDGE_LEGEND.map((l) => (
+        <li key={l.key} className="flex items-center gap-1.5">
+          <svg width="22" height="6" aria-hidden className="shrink-0">
+            <line x1="1" x2="21" y1="3" y2="3" stroke={l.color} strokeWidth="2" strokeDasharray={l.dash} strokeLinecap="round" />
+          </svg>
+          {l.label}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function edgeLabel(e: LineageEdge, aggregate: boolean): string | undefined {
@@ -205,6 +231,23 @@ export function LineagePage() {
   const flow = useMemo(() => (graph.data ? layout(graph.data, aggregate) : null), [graph.data, aggregate]);
   const rows = (decisions.data ?? []).filter((d) => !filter || (d.agent_id === filter.agentId && d.action === filter.action));
 
+  // Tool-call edges double as a keyboard-reachable filter (the graph edges themselves are pointer-only).
+  const callEdges = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { value: string; label: string; filter: CallFilter }[] = [];
+    for (const e of graph.data?.edges ?? []) {
+      if (e.kind !== "invoked") continue;
+      const value = `${e.from}::${e.to}`;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      const agentLabel = graph.data?.nodes.find((n) => n.id === e.from)?.label ?? e.from;
+      const action = e.to.replace(/^tool:/, "");
+      out.push({ value, label: `${agentLabel} → ${action}`, filter: { agentId: e.from.replace(/^agent:/, ""), agentLabel, action } });
+    }
+    return out;
+  }, [graph.data]);
+  const filterValue = filter ? (callEdges.find((c) => c.filter.agentId === filter.agentId && c.filter.action === filter.action)?.value ?? "") : "";
+
   const changeScope = (s: Scope) => (setScope(s), setFilter(null));
   const openTask = (id: string) => (setFilter(null), navigate(`/lineage/${id}`));
   const onEdgeClick = (_: unknown, edge: Edge) => {
@@ -223,9 +266,15 @@ export function LineagePage() {
 
   return (
     <>
-      <PageHeader icon={GitFork} title="Agent Lineage" subtitle="End-to-end path from the initiating user, through every delegated agent and tool, to the approvals and the final result" />
+      <PageHeader title="Agent lineage" subtitle="End-to-end path from the initiating user, through every delegated agent and tool, to the approvals and the final result." />
       {tasks.isLoading ? (
-        <Loading />
+        <Card className="overflow-hidden">
+          <SkeletonRows rows={5} cols={3} />
+        </Card>
+      ) : tasks.isError ? (
+        <Card>
+          <ErrorState title="Couldn't load tasks" error={tasks.error} onRetry={() => void tasks.refetch()} />
+        </Card>
       ) : !tasks.data?.length ? (
         <Card>
           <EmptyState icon={GitFork} title="No tasks yet">
@@ -233,41 +282,55 @@ export function LineagePage() {
           </EmptyState>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[340px_1fr]">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[340px_1fr]">
           <Card title="Recent tasks" className="max-h-[calc(100vh-14rem)] overflow-auto">
             <ul className="divide-y divide-line">
               {tasks.data.map((t) => (
                 <li key={t.root_id}>
                   <button
+                    type="button"
                     onClick={() => openTask(t.root_id)}
-                    className={cx("w-full px-4 py-3 text-left hover:bg-hover", t.root_id === selected && "bg-accent-soft")}
+                    aria-current={t.root_id === selected ? "true" : undefined}
+                    className={cx("w-full px-4 py-3 text-left transition-colors hover:bg-hover focus-visible:-outline-offset-2", focusRing, t.root_id === selected && "bg-accent-soft")}
                   >
-                    <div className="line-clamp-2 text-sm font-medium">{t.intent}</div>
-                    <div className="mt-1 text-xs text-muted">
+                    <div className="line-clamp-2 text-sm font-medium text-fg">{t.intent}</div>
+                    <div className="mt-1 text-caption text-muted">
                       {personLabel(t.subject)} → {t.agents.map((a) => a.name.split("-")[0]).join(" → ")}
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       <StatusPill status={t.status} />
                       {t.decisions.deny ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-critical-ink">
-                          <Ban className="size-3" />
+                        <span className="inline-flex items-center gap-1 text-caption text-critical-ink">
+                          <Ban className="size-3" aria-hidden />
                           {t.decisions.deny} denied
                         </span>
                       ) : null}
-                      <span className="ml-auto text-xs text-faint">{timeAgo(t.issued_at)}</span>
+                      <span className="ml-auto text-caption text-muted">{timeAgo(t.issued_at)}</span>
                     </div>
                   </button>
                 </li>
               ))}
             </ul>
           </Card>
-          <div className="min-w-0 space-y-5">
+          <div className="min-w-0 space-y-6">
             <Card
               title={title}
-              action={!aggregate && task && <div className="flex flex-wrap gap-1.5">{task.intent_categories.map((c) => <Chip key={c} mono>{c}</Chip>)}</div>}
+              action={
+                !aggregate &&
+                task && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {task.intent_categories.map((c) => (
+                      <Chip key={c} mono>
+                        {c}
+                      </Chip>
+                    ))}
+                  </div>
+                )
+              }
             >
               <div className="flex flex-wrap items-center gap-3 border-b border-line px-5 py-3">
                 <Tabs<Scope>
+                  label="Lineage scope"
                   value={scope}
                   onChange={changeScope}
                   tabs={[
@@ -277,14 +340,16 @@ export function LineagePage() {
                   ]}
                 />
                 {aggregate && graph.data && (
-                  <span className="text-xs text-muted">
+                  <span className="text-caption text-muted">
                     Merged view of {graph.data.tasks} {graph.data.tasks === 1 ? "task" : "tasks"} from the last {HOURS} h
-                    {graph.data.truncated ? " (most recent 50 shown)" : ""} · line thickness = number of calls · click a tool call to filter the decisions
+                    {graph.data.truncated ? " (most recent 50 shown)" : ""} · line thickness = number of calls · click a tool-call edge, or use the tool call filter below, to filter the decisions
                   </span>
                 )}
               </div>
-              <div className="h-[440px]">
-                {graph.data && !graph.data.nodes.length ? (
+              <div className="h-[440px]" role="region" aria-label="Lineage graph">
+                {graph.isError ? (
+                  <ErrorState title="Couldn't load the lineage graph" error={graph.error} onRetry={() => void graph.refetch()} />
+                ) : graph.data && !graph.data.nodes.length ? (
                   <EmptyState icon={GitFork} title="No tasks in this window">
                     Nothing matched in the last {HOURS} hours.
                   </EmptyState>
@@ -303,27 +368,77 @@ export function LineagePage() {
                     <Background gap={22} color="var(--line)" />
                     <Controls showInteractive={false} />
                   </ReactFlow>
-                ) : (
+                ) : graph.isLoading ? (
                   <Loading />
+                ) : (
+                  <EmptyState icon={GitFork} title="Nothing to merge yet">
+                    Select a task from the list to see its user or agent across tasks.
+                  </EmptyState>
                 )}
               </div>
-              {!aggregate && task?.status === "revoked" && <div className="border-t border-line px-5 py-3 text-sm text-critical-ink">Task revoked: {task.revoked_reason}</div>}
-              {!aggregate && task?.status === "completed" && <div className="border-t border-line px-5 py-3 text-sm text-muted">Task closed by the agent: every mandate in it was revoked automatically.</div>}
+              <div className="border-t border-line px-5 py-3">
+                <EdgeLegend />
+              </div>
+              {!aggregate && task?.status === "revoked" && (
+                <div className="border-t border-line p-4">
+                  <Callout tone="critical" title="Task revoked">
+                    {task.revoked_reason}
+                  </Callout>
+                </div>
+              )}
+              {!aggregate && task?.status === "completed" && (
+                <div className="border-t border-line p-4">
+                  <Callout tone="info" title="Task closed by the agent">
+                    Every mandate in it was revoked automatically.
+                  </Callout>
+                </div>
+              )}
             </Card>
             <Card
+              className="overflow-hidden"
               title={aggregate ? `Decisions · last ${HOURS} h` : "Decisions in this task"}
               action={
-                filter ? (
-                  <button onClick={() => setFilter(null)} className="inline-flex items-center gap-1 rounded-md border border-line bg-inset px-2 py-0.5 text-xs text-muted hover:text-fg">
-                    {filter.agentLabel} → {filter.action}
-                    <X className="size-3" />
-                  </button>
-                ) : (
-                  task && <Link to={`/agents/${task.agent_id}`} className="text-sm text-accent hover:underline">{task.agent_name} →</Link>
-                )
+                <div className="flex flex-wrap items-center gap-2">
+                  {callEdges.length > 0 && (
+                    <FilterSelect
+                      label="Tool call"
+                      value={filterValue}
+                      onChange={(v) => setFilter(callEdges.find((c) => c.value === v)?.filter ?? null)}
+                      options={callEdges.map((c) => ({ value: c.value, label: c.label }))}
+                    />
+                  )}
+                  {filter ? (
+                    <>
+                      <Chip>
+                        {filter.agentLabel} → {filter.action}
+                      </Chip>
+                      <Button variant="ghost" size="sm" icon={X} onClick={() => setFilter(null)}>
+                        Clear filter
+                      </Button>
+                    </>
+                  ) : (
+                    task && (
+                      <Link to={`/agents/${task.agent_id}`} className={cx("rounded text-sm text-accent hover:underline", focusRing)}>
+                        {task.agent_name} →
+                      </Link>
+                    )
+                  )}
+                </div>
               }
             >
-              <div className="overflow-x-auto">{decisions.data ? <DecisionTable rows={rows} /> : <Loading />}</div>
+              {decisions.isLoading ? (
+                <SkeletonRows rows={4} cols={5} />
+              ) : decisions.isError ? (
+                <ErrorState title="Couldn't load decisions" error={decisions.error} onRetry={() => void decisions.refetch()} />
+              ) : !rows.length ? (
+                <EmptyState title={filter ? "No decisions for this tool call" : "No decisions recorded"}>
+                  {filter ? "Clear the filter to see every decision." : "Decisions appear as the agents in this task call tools."}
+                </EmptyState>
+              ) : (
+                <div className="overflow-x-auto">
+                  <DecisionTable rows={rows} />
+                </div>
+              )}
             </Card>
             {!aggregate && selected && <TraceWaterfall rootId={selected} />}
           </div>

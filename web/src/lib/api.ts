@@ -1,4 +1,4 @@
-// Thin fetch client. The bearer token belongs to the persona chosen in the header switcher.
+// Thin fetch client. The bearer token belongs to whoever signed in on the sign-in page.
 
 export class ApiError extends Error {
   constructor(
@@ -18,7 +18,7 @@ export function setToken(value: string | null) {
 }
 
 /** Called on 401 (e.g. the demo server restarted with new signing keys) to get a fresh token once. */
-export function setRelogin(fn: () => Promise<string>) {
+export function setRelogin(fn: (() => Promise<string>) | null) {
   relogin = fn;
 }
 

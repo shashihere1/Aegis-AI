@@ -1,13 +1,37 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Activity, Cloud, FileCode, Fingerprint, Ghost, KeyRound, Network, Radar, RefreshCw, ShieldBan, UserPlus, type LucideIcon } from "lucide-react";
+import { Activity, Cloud, FileCode, KeyRound, Network, Radar, RefreshCw, ShieldBan, UserPlus, type LucideIcon } from "lucide-react";
 import { post } from "../lib/api";
 import { useDiscoveryStatus, useFindings, useIdentityStatus, useStats } from "../lib/queries";
 import { useToast } from "../lib/toast";
 import { timeAgo } from "../lib/format";
 import type { DiscoverySourceState, DiscoveryStatus, Finding, ReconcileReport } from "../lib/types";
-import { Button, Card, Chip, EmptyState, Kpi, Loading, Modal, PageHeader, Pill, StatusPill } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Callout,
+  Card,
+  Chip,
+  EmptyState,
+  ErrorState,
+  Modal,
+  PageHeader,
+  Skeleton,
+  SkeletonRows,
+  Stat,
+  StatGroup,
+  StatusPill,
+  TBody,
+  THead,
+  Table,
+  Td,
+  Th,
+  TimeAgo,
+  Tr,
+  cx,
+  focusRing,
+} from "../components/ui";
 import { AgentForm, type AgentDraft } from "./RegisterAgent";
 
 const SOURCE_LABEL: Record<string, string> = { gateway: "Gateway traffic", idp: "IdP scan", otel: "Telemetry", repo: "Code scan", cloud: "Cloud scan" };
@@ -45,23 +69,25 @@ function idpScanSummary(scan: DiscoveryStatus["idp_scan"]): { text: string; fail
 function DiscoverySources({ status }: { status: DiscoveryStatus }) {
   const scan = idpScanSummary(status.idp_scan);
   return (
-    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-      {SOURCES.map((s) => {
-        const state = STATE[status.sources[s.key]];
-        const planned = status.sources[s.key] === "planned";
-        return (
-          <div key={s.key} className={`rounded-xl border border-line bg-card p-4 ${planned ? "opacity-70" : ""}`}>
-            <div className="mb-2 flex items-center gap-2">
-              <s.icon className={`size-4 ${planned ? "text-faint" : "text-accent"}`} />
-              <span className="flex-1 text-sm font-medium">{s.label}</span>
-              <Pill tone={s.key === "idp" && scan.failed ? "warning" : state.tone}>{state.label}</Pill>
-            </div>
-            <p className="text-xs text-muted">{s.text}</p>
-            {s.key === "idp" && <p className={`mt-2 text-xs ${scan.failed ? "text-warning-ink" : "text-faint"}`}>{scan.text}</p>}
-          </div>
-        );
-      })}
-    </div>
+    <Card title="Discovery sources" description="Where Aegis looks for agents that are not in the registry" className="mb-6">
+      <ul className="divide-y divide-line">
+        {SOURCES.map((s) => {
+          const state = STATE[status.sources[s.key]];
+          const planned = status.sources[s.key] === "planned";
+          return (
+            <li key={s.key} className={cx("flex items-start gap-3 px-5 py-3.5", planned && "opacity-70")}>
+              <s.icon className={cx("mt-0.5 size-4 shrink-0", planned ? "text-faint" : "text-muted")} aria-hidden />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-fg">{s.label}</div>
+                <p className="text-caption text-muted">{s.text}</p>
+                {s.key === "idp" && <p className={cx("mt-1 text-caption", scan.failed ? "text-warning-ink" : "text-muted")}>{scan.text}</p>}
+              </div>
+              <Badge tone={s.key === "idp" && scan.failed ? "warning" : state.tone}>{state.label}</Badge>
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
   );
 }
 
@@ -74,9 +100,12 @@ function evidenceSummary(f: Finding): string {
 
 export function ShadowAgents() {
   const findings = useFindings();
-  const stats = useStats().data;
-  const identity = useIdentityStatus().data;
-  const discovery = useDiscoveryStatus().data;
+  const statsQuery = useStats();
+  const identityQuery = useIdentityStatus();
+  const discoveryQuery = useDiscoveryStatus();
+  const stats = statsQuery.data;
+  const identity = identityQuery.data;
+  const discovery = discoveryQuery.data;
   const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -124,11 +153,16 @@ export function ShadowAgents() {
   const list = findings.data ?? [];
   const open = list.filter((f) => f.status === "open");
 
+  const retryButton = (refetch: () => unknown) => (
+    <Button size="sm" onClick={() => void refetch()}>
+      Try again
+    </Button>
+  );
+
   return (
     <>
       <PageHeader
-        icon={Ghost}
-        title="Shadow Agents"
+        title="Shadow agents"
         subtitle="Agents acting without a governed identity, found from Gateway traffic and scheduled scans of the identity provider"
         actions={
           <Button icon={Radar} roles={["soc-analyst", "admin"]} loading={scan.isPending} onClick={() => scan.mutate()}>
@@ -136,72 +170,119 @@ export function ShadowAgents() {
           </Button>
         }
       />
-      {discovery && <DiscoverySources status={discovery} />}
-      {identity && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-card px-4 py-3 text-sm">
-          <KeyRound className="size-4 text-accent" />
-          <span>
-            Agent identities live in <b>{identity.provider === "keycloak" ? "Keycloak" : "the built-in development IdP"}</b>
-          </span>
-          <Pill tone={identity.reachable ? "good" : "critical"}>{identity.reachable ? "reachable" : "unreachable"}</Pill>
-          <span className="text-muted">{identity.agents_with_identity} governed agent identities</span>
-          {identity.detail && <span className="truncate text-xs text-critical-ink">{identity.detail}</span>}
-          <Button className="ml-auto" icon={RefreshCw} roles={["admin", "security-approver"]} loading={reconcile.isPending} onClick={() => reconcile.mutate()}>
-            Reconcile
-          </Button>
-        </div>
+
+      <StatGroup columns={3} className="mb-8">
+        <Stat label="Open findings" tone="warning" value={findings.data ? open.length : "—"} caption="Awaiting claim or quarantine" />
+        <Stat label="Quarantined" value={findings.data ? list.filter((f) => f.status === "quarantined").length : "—"} caption="Blocked at the Gateway" />
+        <Stat label="Discovered or quarantined agents" value={stats?.shadow ?? "—"} caption="In the registry, not yet governed" to="/agents" />
+      </StatGroup>
+
+      {discovery ? (
+        <DiscoverySources status={discovery} />
+      ) : discoveryQuery.isError ? (
+        <Callout tone="warning" title="Couldn't load discovery sources" className="mb-6" action={retryButton(discoveryQuery.refetch)}>
+          {discoveryQuery.error instanceof Error ? discoveryQuery.error.message : "Discovery status is unavailable."}
+        </Callout>
+      ) : (
+        <Skeleton className="mb-6 h-40 rounded-xl" />
       )}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Kpi icon={Ghost} tone="warning" label="Open findings" value={open.length} />
-        <Kpi icon={ShieldBan} tone="critical" label="Quarantined" value={list.filter((f) => f.status === "quarantined").length} />
-        <Kpi icon={Fingerprint} label="Discovered / quarantined agents" value={stats?.shadow ?? "—"} hint="In the registry, not yet governed" onClick={() => navigate("/agents")} />
-      </div>
-      <Card title="Findings">
+
+      {identity ? (
+        <Callout
+          tone={identity.reachable ? "good" : "critical"}
+          icon={KeyRound}
+          title={`Agent identities live in ${identity.provider === "keycloak" ? "Keycloak" : "the built-in development IdP"} · ${identity.reachable ? "Reachable" : "Unreachable"}`}
+          className="mb-6"
+          action={
+            <Button icon={RefreshCw} roles={["admin", "security-approver"]} loading={reconcile.isPending} onClick={() => reconcile.mutate()}>
+              Reconcile
+            </Button>
+          }
+        >
+          {identity.agents_with_identity} governed agent identities
+          {identity.detail && <span className="block truncate text-xs text-critical-ink">{identity.detail}</span>}
+        </Callout>
+      ) : identityQuery.isError ? (
+        <Callout tone="warning" title="Couldn't load identity status" className="mb-6" action={retryButton(identityQuery.refetch)}>
+          {identityQuery.error instanceof Error ? identityQuery.error.message : "Identity provider status is unavailable."}
+        </Callout>
+      ) : (
+        <Skeleton className="mb-6 h-16 rounded-lg" />
+      )}
+
+      <Card title="Findings" className="overflow-hidden">
         {findings.isLoading ? (
-          <Loading />
+          <SkeletonRows cols={6} />
+        ) : findings.isError ? (
+          <ErrorState title="Couldn't load findings" error={findings.error} onRetry={() => void findings.refetch()} />
         ) : !list.length ? (
           <EmptyState icon={Radar} title="No shadow agents found yet">
             Discovery findings come from identity scans and requests to the Gateway without a valid Mandate.
           </EmptyState>
         ) : (
-          <ul className="divide-y divide-line">
-            {list.map((f) => (
-              <li key={f.id} className="flex flex-wrap items-center gap-4 px-5 py-4">
-                <div className="grid size-10 place-items-center rounded-xl bg-warning/12 text-warning-ink">
-                  <Ghost className="size-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm font-medium">{f.fingerprint}</span>
+          <Table>
+            <THead>
+              <Th>Finding</Th>
+              <Th>Sources</Th>
+              <Th numeric>Signals</Th>
+              <Th>First seen</Th>
+              <Th>Last seen</Th>
+              <Th>Status</Th>
+              <Th>
+                <span className="sr-only">Actions</span>
+              </Th>
+            </THead>
+            <TBody>
+              {list.map((f) => (
+                <Tr key={f.id} className="align-top">
+                  <Td className="max-w-md">
+                    <div className="font-mono text-sm font-medium text-fg">{f.fingerprint}</div>
+                    <div className="mt-0.5 truncate text-caption text-muted" title={evidenceSummary(f)}>
+                      {evidenceSummary(f)}
+                    </div>
+                  </Td>
+                  <Td>
+                    <div className="flex flex-wrap gap-1">
+                      {f.sources.map((s) => (
+                        <Chip key={s}>{SOURCE_LABEL[s] ?? s}</Chip>
+                      ))}
+                    </div>
+                  </Td>
+                  <Td numeric>{f.hits}</Td>
+                  <Td className="text-muted">
+                    <TimeAgo value={f.first_seen} />
+                  </Td>
+                  <Td className="text-muted">
+                    <TimeAgo value={f.last_seen} />
+                  </Td>
+                  <Td>
                     <StatusPill status={f.status} />
-                    {f.sources.map((s) => (
-                      <Chip key={s}>{SOURCE_LABEL[s] ?? s}</Chip>
-                    ))}
-                  </div>
-                  <div className="mt-1 truncate text-sm text-muted">{evidenceSummary(f)}</div>
-                  <div className="mt-0.5 text-xs text-faint">
-                    {f.hits} {f.hits === 1 ? "signal" : "signals"} · first seen {timeAgo(f.first_seen)} · last seen {timeAgo(f.last_seen)}
-                  </div>
-                </div>
-                {f.status === "open" ? (
-                  <div className="flex gap-2">
-                    <Button icon={UserPlus} roles={["agent-developer", "agent-owner"]} onClick={() => setClaiming(f)}>
-                      Claim
-                    </Button>
-                    <Button variant="danger" icon={ShieldBan} roles={["soc-analyst"]} loading={quarantine.isPending && quarantine.variables?.id === f.id} onClick={() => quarantine.mutate(f)}>
-                      Quarantine
-                    </Button>
-                  </div>
-                ) : (
-                  f.agent_id && (
-                    <Pill tone="accent" className="cursor-pointer" icon={UserPlus}>
-                      <span onClick={() => navigate(`/agents/${f.agent_id}`)}>Registered as {f.agent_id}</span>
-                    </Pill>
-                  )
-                )}
-              </li>
-            ))}
-          </ul>
+                  </Td>
+                  <Td>
+                    <div className="flex justify-end gap-2">
+                      {f.status === "open" ? (
+                        <>
+                          <Button size="sm" icon={UserPlus} roles={["agent-developer", "agent-owner"]} onClick={() => setClaiming(f)}>
+                            Claim
+                          </Button>
+                          <Button variant="danger" size="sm" icon={ShieldBan} roles={["soc-analyst"]} loading={quarantine.isPending && quarantine.variables?.id === f.id} onClick={() => quarantine.mutate(f)}>
+                            Quarantine
+                          </Button>
+                        </>
+                      ) : (
+                        f.agent_id && (
+                          <Link to={`/agents/${f.agent_id}`} className={cx("inline-flex items-center gap-1.5 rounded text-sm whitespace-nowrap text-accent hover:underline", focusRing)}>
+                            <UserPlus className="size-3.5" aria-hidden />
+                            Registered as <span className="font-mono text-xs">{f.agent_id}</span>
+                          </Link>
+                        )
+                      )}
+                    </div>
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
         )}
       </Card>
       <Modal open={!!claiming} onClose={() => setClaiming(null)} title="Claim this agent" wide>

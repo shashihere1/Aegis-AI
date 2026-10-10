@@ -4,7 +4,7 @@ import { ApiError, api, post } from "../lib/api";
 import { useSession } from "../lib/session";
 import { useToast } from "../lib/toast";
 import type { Policies, PolicyDiff, RulesCheck } from "../lib/types";
-import { Button, Card, Field, JsonBlock, Select, TextInput } from "./ui";
+import { Button, Callout, Card, Field, JsonBlock, Select, Skeleton, Textarea, TextInput } from "./ui";
 
 interface ReplayReport {
   evaluated: number; skipped: number; changed: number; more_permissive?: number; rules_changed?: boolean; generated_at: string;
@@ -24,8 +24,8 @@ interface Repository { differs: boolean; files: { file: string; status: string; 
 type RulesMode = "keep" | "edit" | "import";
 
 function CheckReport({ checks }: { checks: RulesCheck }) {
-  if (checks.skipped) return <p className="text-xs text-faint">Automatic checks: not needed ({checks.skipped}).</p>;
-  if (checks.passed === undefined) return <p className="text-xs text-faint">Automatic checks: not recorded for this version.</p>;
+  if (checks.skipped) return <p className="text-caption text-muted">Automatic checks: not needed ({checks.skipped}).</p>;
+  if (checks.passed === undefined) return <p className="text-caption text-muted">Automatic checks: not recorded for this version.</p>;
   return <div className="space-y-1 text-sm">
     <p className={checks.passed ? "text-good-ink" : "text-critical-ink"}>
       Automatic checks {checks.passed ? "passed" : "failed"}{checks.cases ? ` · test cases ${checks.cases.passed}/${checks.cases.total}` : ""}
@@ -38,12 +38,12 @@ function CheckReport({ checks }: { checks: RulesCheck }) {
 function DiffView({ diff }: { diff: PolicyDiff }) {
   const changed = diff.rules.filter((f) => f.status !== "unchanged");
   return <div className="space-y-3 rounded-lg border border-line p-4">
-    <p className="text-sm font-semibold">What activating this version changes (compared with {diff.against})</p>
+    <p className="text-sm font-semibold text-fg">What activating this version changes (compared with {diff.against})</p>
     {!changed.length && !diff.configuration.length && <p className="text-sm text-muted">Nothing: same rules and configuration.</p>}
     {diff.configuration.map((c) => <p key={c.path} className="font-mono text-xs">{c.path}: {JSON.stringify(c.before)} → {JSON.stringify(c.after)}</p>)}
-    {diff.cases.changed && <p className="text-xs text-muted">Test cases changed: {diff.cases.before} → {diff.cases.after}</p>}
+    {diff.cases.changed && <p className="text-caption text-muted">Test cases changed: {diff.cases.before} → {diff.cases.after}</p>}
     {changed.map((f) => <div key={f.file}>
-      <p className="mb-1 text-xs text-muted">{f.file} · {f.status} · +{f.added_lines} −{f.removed_lines}</p>
+      <p className="mb-1 text-caption text-muted">{f.file} · {f.status} · +{f.added_lines} −{f.removed_lines}</p>
       <pre className="max-h-80 overflow-auto rounded-lg bg-inset p-3 font-mono text-xs leading-relaxed">
         {f.diff.split("\n").map((line, i) => <div key={i} className={line.startsWith("+") && !line.startsWith("+++") ? "text-good-ink" : line.startsWith("-") && !line.startsWith("---") ? "text-critical-ink" : line.startsWith("@@") ? "text-info-ink" : "text-muted"}>{line || " "}</div>)}
       </pre>
@@ -114,11 +114,13 @@ export function PolicyGovernance({ policy }: { policy: Policies }) {
   };
   const invalidDraft = name.trim().length < 3 || reason.trim().length < 5 || !threshold.trim() || !Number.isFinite(Number(threshold)) || Number(threshold) < 0 || Number(threshold) > 1000000 || (mode === "edit" && (!Object.keys(modules).length || !!casesError));
 
-  return <Card title="Governed policy changes" className="mb-5">
+  return <Card title="Governed policy changes" className="mb-6">
     <div className="space-y-5 p-5">
       <p className="text-sm text-muted">Active payment threshold: <strong className="text-fg">EUR {payments?.hitl_amount_eur?.toLocaleString()}</strong>. Runtime: {policy.engine}. {rulesEditable ? "Versions can change the configuration and the Rego rules; the engine runs the approved Rego from the database, never the files on disk." : "The python engine mirrors the repository rules, so versions change configuration only (set AEGIS_POLICY_ENGINE=rego or opa to govern the Rego too)."}</p>
-      <p className="text-xs text-faint">Author: Priya. Policy approver: Fatima. A rule change, or a change that loosens a replayed decision, also needs a security sign-off from a second person (Lars). Switch personas in the header.</p>
-      {repository.data?.differs && <p className="rounded-lg border border-line bg-inset p-3 text-sm text-warning-ink">The Rego in the repository differs from the running policy ({repository.data.files.filter((f) => f.status !== "unchanged").map((f) => `${f.file} +${f.added_lines} −${f.removed_lines}`).join(", ")}). It changes nothing until it is imported as a draft and approved.</p>}
+      <p className="text-caption text-muted">Author: Priya. Policy approver: Fatima. A rule change, or a change that loosens a replayed decision, also needs a security sign-off from a second person (Lars). Sign out and sign in as another persona to play each role.</p>
+      {repository.isLoading && <Skeleton className="h-4 w-80 max-w-full" />}
+      {repository.isError && !repository.data && <Callout tone="warning" title="Couldn't compare the repository Rego" action={<Button size="sm" onClick={() => void repository.refetch()}>Try again</Button>}>{repository.error.message}</Callout>}
+      {repository.data?.differs && <Callout tone="warning" title="The repository Rego differs from the running policy">{repository.data.files.filter((f) => f.status !== "unchanged").map((f) => `${f.file} +${f.added_lines} −${f.removed_lines}`).join(", ")}. It changes nothing until it is imported as a draft and approved.</Callout>}
       {policy.engine === "opa" && <Button roles={["policy-approver", "security-approver", "admin"]} disabled={busy || reason.trim().length < 5} onClick={() => act.mutate({ path: "/v1/policies/opa/sync", body: { justification: reason } })}>Push the approved policy to OPA</Button>}
       {can("policy-author") && <div className="space-y-3">
         <div className="grid gap-3 md:grid-cols-2">
@@ -130,22 +132,27 @@ export function PolicyGovernance({ policy }: { policy: Policies }) {
             ...(rulesEditable ? [{ value: "edit", label: "Edit the rules" }, { value: "import", label: "Import the rules from the repository" }] : []),
           ]} />
         </div>
-        {mode === "edit" && <div className="space-y-2">
+        {mode === "edit" && edits === null && activeRules.isLoading && <Skeleton className="h-80 w-full" />}
+        {mode === "edit" && edits === null && activeRules.isError && <Callout tone="critical" title="Couldn't load the active rules" action={<Button size="sm" onClick={() => void activeRules.refetch()}>Try again</Button>}>{activeRules.error.message}</Callout>}
+        {mode === "edit" && (edits !== null || activeRules.data) && <div className="space-y-2">
           {Object.keys(modules).length > 1 && <Select label="File" value={editingFile} onChange={setFile} options={Object.keys(modules).map((f) => ({ value: f, label: f }))} />}
           <Field label={`Rego · ${editingFile}`} hint="Checked before the draft is saved: it must compile, keep data.aegis.tool_call.decision, use no network or non-deterministic functions, and pass every test case.">
-            <textarea spellCheck={false} value={modules[editingFile] ?? ""} onChange={(e) => setEdits({ ...modules, [editingFile]: e.target.value })} className="h-80 w-full rounded-lg border border-line-strong bg-inset p-3 font-mono text-xs outline-none focus:border-accent" />
+            <Textarea spellCheck={false} value={modules[editingFile] ?? ""} onChange={(e) => setEdits({ ...modules, [editingFile]: e.target.value })} className="min-h-80 bg-inset font-mono text-xs" />
           </Field>
           {casesText === null
             ? <Button disabled={!activeRules.data} onClick={() => setCasesText(JSON.stringify(activeRules.data?.cases ?? [], null, 1))}>Also edit the test cases</Button>
             : <Field label="Test cases (JSON)" hint={casesError || "Each case: name, input, decision, rules, match (exact | include), optional obligations. Change a case when you change that behaviour on purpose."}>
-                <textarea spellCheck={false} value={casesText} onChange={(e) => setCasesText(e.target.value)} className="h-60 w-full rounded-lg border border-line-strong bg-inset p-3 font-mono text-xs outline-none focus:border-accent" />
+                <Textarea spellCheck={false} value={casesText} onChange={(e) => setCasesText(e.target.value)} className="min-h-60 bg-inset font-mono text-xs" />
               </Field>}
           {edits && <Button onClick={() => { setEdits(null); setCasesText(null); }}>Discard my edits</Button>}
         </div>}
         <Button loading={busy} disabled={invalidDraft} onClick={saveDraft}>Save immutable draft</Button>
-        {failedChecks && <div className="rounded-lg border border-line p-4"><CheckReport checks={failedChecks} /></div>}
+        {failedChecks && <Callout tone="critical" title="The draft was not saved"><CheckReport checks={failedChecks} /></Callout>}
       </div>}
-      <Select label="Version to review" value={selected} onChange={setSelected} options={[{ value: "", label: "Select a policy version" }, ...(versions.data?.versions ?? []).map((v) => ({ value: v.id, label: `${v.name} - ${v.status} (${v.id})` }))]} />
+      {versions.isError && !versions.data
+        ? <Callout tone="critical" title="Couldn't load policy versions" action={<Button size="sm" onClick={() => void versions.refetch()}>Try again</Button>}>{versions.error.message}</Callout>
+        : versions.isLoading ? <Skeleton className="h-9 w-full" />
+        : <Select label="Version to review" value={selected} onChange={setSelected} options={[{ value: "", label: "Select a policy version" }, ...(versions.data?.versions ?? []).map((v) => ({ value: v.id, label: `${v.name} - ${v.status} (${v.id})` }))]} />}
       {current && <div className="space-y-3">
         <p className="text-sm">{current.status} · author {current.author} · approver {current.approver ?? "not yet approved"}</p>
         <p className="text-sm text-muted">Proposal: {current.justification}</p>
@@ -155,9 +162,11 @@ export function PolicyGovernance({ policy }: { policy: Policies }) {
           <CheckReport checks={current.rules.checks} />
           {security?.required
             ? <p className={security.approver ? "text-good-ink" : "text-warning-ink"}>Security sign-off required ({[security.rules_changed && "the rules change", security.more_permissive > 0 && `${security.more_permissive} replayed decisions become more permissive`].filter(Boolean).join("; ")}): {security.approver ? `signed off by ${security.approver} — ${security.justification}` : "not yet given"}</p>
-            : <p className="text-xs text-faint">No security sign-off needed: same rules, and no replayed decision becomes more permissive.</p>}
+            : <p className="text-caption text-muted">No security sign-off needed: same rules, and no replayed decision becomes more permissive.</p>}
         </div>}
-        {!current.rules && <p className="text-sm text-warning-ink">This version's Rego was never recorded, so it cannot be activated.</p>}
+        {!current.rules && <Callout tone="warning">This version's Rego was never recorded, so it cannot be activated.</Callout>}
+        {current.status !== "active" && diff.isLoading && <Skeleton className="h-24 w-full" />}
+        {current.status !== "active" && diff.isError && <Callout tone="critical" title="Couldn't load the comparison with the active version" action={<Button size="sm" onClick={() => void diff.refetch()}>Try again</Button>}>{diff.error.message}</Callout>}
         {diff.data && current.status !== "active" && <DiffView diff={diff.data} />}
         <JsonBlock value={current.configuration} />
         {(can("policy-approver") || can("security-approver")) && <Field label="Review / activation justification"><TextInput value={reason} onChange={(e) => setReason(e.target.value)} /></Field>}
@@ -172,15 +181,15 @@ export function PolicyGovernance({ policy }: { policy: Policies }) {
         {report?.generated_at && <div className="space-y-2 rounded-lg border border-line p-4">
           <p>Replay: {report.evaluated} evaluated · {report.changed} changed · {report.skipped} skipped{report.more_permissive ? <strong className="text-warning-ink"> · {report.more_permissive} more permissive</strong> : null}</p>
           <JsonBlock value={report.transitions} />
-          <p className="text-xs text-faint">{report.limitations}</p>
-          {report.evaluated === 0 && <p className="text-warning-ink">No compatible traffic to replay. Run a Bank Assistant transfer first for meaningful evidence.</p>}
+          <p className="text-caption text-muted">{report.limitations}</p>
+          {report.evaluated === 0 && <Callout tone="warning">No compatible traffic to replay. Run a Bank Assistant transfer first for meaningful evidence.</Callout>}
           <ul className="max-h-60 space-y-2 overflow-auto text-xs">{report.results?.filter((r) => r.changed).map((r) => <li key={r.decision_id} className={r.more_permissive ? "text-warning-ink" : undefined}>
             {r.action}: {r.before} → {r.after} ({r.decision_id}){r.more_permissive ? " · more permissive" : ""}
             {r.changed_fields && <span className="ml-2 text-muted">Changed: {r.changed_fields.join(", ")}</span>}
             {r.changed_fields?.includes("obligations") && <JsonBlock value={{ before: r.before_obligations, after: r.after_obligations }} />}
           </li>)}</ul>
         </div>}
-        <p className="break-all font-mono text-xs text-faint">Configuration hash: {current.content_hash}{current.rules ? ` · rules hash: ${current.rules.bundle_hash}` : ""}</p>
+        <p className="break-all font-mono text-xs text-muted">Configuration hash: {current.content_hash}{current.rules ? ` · rules hash: ${current.rules.bundle_hash}` : ""}</p>
       </div>}
     </div>
   </Card>;

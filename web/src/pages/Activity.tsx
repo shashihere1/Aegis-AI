@@ -5,35 +5,35 @@ import { Activity, EyeOff, Gauge } from "lucide-react";
 import { api } from "../lib/api";
 import { clock, personLabel } from "../lib/format";
 import type { Decision } from "../lib/types";
-import { Card, Chip, DECISIONS, DecisionPill, EmptyState, Loading, PageHeader, Tabs, Td, Th, cx } from "../components/ui";
+import { Card, Chip, DECISIONS, DecisionPill, EmptyState, ErrorState, PageHeader, SkeletonRows, TBody, THead, Table, TableToolbar, Tabs, Td, Th, Tr, cx, focusRing } from "../components/ui";
 
 export function DecisionTable({ rows, fresh }: { rows: Decision[]; fresh?: Set<string> }) {
   return (
-    <table className="w-full">
-      <thead className="border-b border-line bg-inset">
-        <tr>
-          <Th>Time</Th>
-          <Th>Agent</Th>
-          <Th>Action</Th>
-          <Th>Decision</Th>
-          <Th>Why</Th>
-          <Th>Obligations</Th>
-          <Th>For</Th>
-          <Th className="text-right">Latency</Th>
-          <Th></Th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-line">
+    <Table>
+      <THead>
+        <Th>Time</Th>
+        <Th>Agent</Th>
+        <Th>Action</Th>
+        <Th>Decision</Th>
+        <Th>Why</Th>
+        <Th>Obligations</Th>
+        <Th>For</Th>
+        <Th numeric>Latency</Th>
+        <Th>
+          <span className="sr-only">Lineage</span>
+        </Th>
+      </THead>
+      <TBody>
         {rows.map((d) => (
-          <tr key={d.id} className={cx("hover:bg-hover", fresh?.has(d.id) && "row-new")}>
+          <Tr key={d.id} className={cx(fresh?.has(d.id) && "row-new")}>
             <Td className="tabular whitespace-nowrap text-muted">{clock(d.ts)}</Td>
             <Td className="whitespace-nowrap">
               {d.agent_id ? (
-                <Link to={`/agents/${d.agent_id}`} className="font-medium hover:text-accent">
+                <Link to={`/agents/${d.agent_id}`} className={cx("rounded font-medium text-fg hover:text-accent", focusRing)}>
                   {d.agent_name ?? d.agent_id}
                 </Link>
               ) : (
-                <span className="text-faint">Aegis STS</span>
+                <span className="text-muted">Aegis STS</span>
               )}
             </Td>
             <Td className="font-mono text-xs whitespace-nowrap">{d.action_label}</Td>
@@ -50,7 +50,7 @@ export function DecisionTable({ rows, fresh }: { rows: Decision[]; fresh?: Set<s
                   ))}
                 </div>
               ) : (
-                <span className="text-xs text-faint">all rules passed</span>
+                <span className="text-xs text-muted">All rules passed</span>
               )}
             </Td>
             <Td>
@@ -71,18 +71,20 @@ export function DecisionTable({ rows, fresh }: { rows: Decision[]; fresh?: Set<s
               </div>
             </Td>
             <Td className="text-muted">{personLabel(d.subject)}</Td>
-            <Td className="tabular text-right text-muted">{d.latency_ms ? `${d.latency_ms.toFixed(0)} ms` : "—"}</Td>
+            <Td numeric className="text-muted">
+              {d.latency_ms ? `${d.latency_ms.toFixed(0)} ms` : "—"}
+            </Td>
             <Td>
               {d.root_id && (
-                <Link to={`/lineage/${d.root_id}`} className="text-sm whitespace-nowrap text-accent hover:underline">
+                <Link to={`/lineage/${d.root_id}`} className={cx("rounded text-sm whitespace-nowrap text-accent hover:underline", focusRing)}>
                   Lineage →
                 </Link>
               )}
             </Td>
-          </tr>
+          </Tr>
         ))}
-      </tbody>
-    </table>
+      </TBody>
+    </Table>
   );
 }
 
@@ -108,25 +110,27 @@ export function ActivityFeed() {
   return (
     <>
       <PageHeader
-        icon={Activity}
         title="Activity"
         subtitle="Every decision the Gateway and STS made, as it happens"
-        actions={
-          <span className="flex items-center gap-2 text-sm text-muted">
-            <span className="live-dot size-2 rounded-full bg-good" /> Live
+        meta={
+          <span className="inline-flex items-center gap-2">
+            <span className="live-dot size-2 rounded-full bg-good" aria-hidden /> Live
           </span>
         }
       />
-      <div className="mb-4">
+      <TableToolbar end={list.data && <span className="tabular">{list.data.length} shown</span>}>
         <Tabs
+          label="Decision"
           value={filter}
           onChange={setFilter}
           tabs={[{ value: "all", label: "All" }, ...Object.entries(DECISIONS).map(([value, d]) => ({ value, label: d.label }))]}
         />
-      </div>
-      <Card className="overflow-x-auto">
+      </TableToolbar>
+      <Card className="overflow-hidden">
         {list.isLoading ? (
-          <Loading />
+          <SkeletonRows cols={7} />
+        ) : list.isError ? (
+          <ErrorState title="Couldn't load activity" error={list.error} onRetry={() => void list.refetch()} />
         ) : !list.data?.length ? (
           <EmptyState icon={Activity} title="No activity yet">
             Start a Bank Assistant task to see authorized tool decisions stream in.

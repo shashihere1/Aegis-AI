@@ -1,12 +1,15 @@
 @import "tailwindcss";
 
-/* Design tokens. Components use roles (bg-card, text-muted, ...) so light/dark swap in one place. */
+/* Design tokens ("Meridian"). Components use roles (bg-card, text-muted, ...) so light/dark swap in one place.
+   Neutral canvas, white surfaces, one blue accent; status colours only where state is communicated. */
 @theme {
   --color-page: var(--page);
   --color-panel: var(--panel);
   --color-card: var(--card);
   --color-inset: var(--inset);
   --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-overlay: var(--overlay);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-fg: var(--fg);
@@ -17,6 +20,7 @@
   --color-accent-soft: var(--accent-soft);
   --color-on-accent: var(--on-accent);
   --color-series: var(--series);
+  --color-chart-muted: var(--chart-muted);
   --color-good: var(--good);
   --color-warning: var(--warning);
   --color-serious: var(--serious);
@@ -26,66 +30,90 @@
   --color-serious-ink: var(--serious-ink);
   --color-critical-ink: var(--critical-ink);
   --color-info-ink: var(--info-ink);
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-caption: 0.8125rem;
+  --text-caption--line-height: 1.125rem;
+
+  /* Quiet elevation, as real utilities so variants (hover:shadow-pop) work. */
+  --shadow-card: var(--elevation-1);
+  --shadow-pop: var(--elevation-2);
+  --shadow-overlay: var(--elevation-3);
+  --shadow-soft: var(--elevation-3);
 }
 
 :root,
-[data-theme="dark"] {
-  color-scheme: dark;
-  --page: #0b0f14;
-  --panel: #0e131a;
-  --card: #121821;
-  --inset: #0f141b;
-  --hover: #1a2230;
-  --line: rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.14);
-  --fg: #e7ecf2;
-  --muted: #9aa6b5;
-  --faint: #6b7686;
-  --accent: #22b867;
-  --accent-strong: #16a35a;
-  --accent-soft: rgba(34, 184, 103, 0.13);
-  --on-accent: #04140b;
-  --series: #3987e5;
-  /* status palette (fixed): good / warning / serious / critical */
-  --good: #0ca30c;
-  --warning: #fab219;
-  --serious: #ec835a;
-  --critical: #d03b3b;
-  --good-ink: #5fd38a;
-  --warning-ink: #f8c95a;
-  --serious-ink: #f2a582;
-  --critical-ink: #f08080;
-  --info-ink: #8fb9f0;
-}
-
 [data-theme="light"] {
   color-scheme: light;
-  --page: #f4f6f5;
-  --panel: #ffffff;
+  --page: #f8f9fb;
+  --panel: #f8f9fb;
   --card: #ffffff;
-  --inset: #f6f8f7;
-  --hover: #eef2f0;
-  --line: rgba(11, 15, 20, 0.08);
-  --line-strong: rgba(11, 15, 20, 0.16);
-  --fg: #0e141b;
-  --muted: #4b5563;
-  --faint: #8a94a2;
-  --accent: #128a4c;
-  --accent-strong: #0f7a43;
-  --accent-soft: rgba(18, 138, 76, 0.1);
+  --inset: #f3f4f6;
+  --hover: rgb(17 24 39 / 0.04);
+  --selected: rgb(17 24 39 / 0.06);
+  --overlay: rgb(17 24 39 / 0.32);
+  --line: rgb(17 24 39 / 0.08);
+  --line-strong: rgb(17 24 39 / 0.14);
+  --fg: #111827;
+  --muted: #6b7280;
+  --faint: #8a909b;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-soft: #eff4ff;
   --on-accent: #ffffff;
-  --series: #2a78d6;
-  --good: #0ca30c;
-  --warning: #fab219;
-  --serious: #ec835a;
-  --critical: #d03b3b;
-  --good-ink: #0b6b2e;
-  --warning-ink: #8a5a00;
-  --serious-ink: #9a3f16;
-  --critical-ink: #b42323;
-  --info-ink: #1d5fae;
+  --series: #2563eb;
+  --chart-muted: #b8c0cc;
+  /* status scale (fixed meaning): good / warning / serious / critical */
+  --good: #16a34a;
+  --warning: #f59e0b;
+  --serious: #ea580c;
+  --critical: #dc2626;
+  --good-ink: #15803d;
+  --warning-ink: #b45309;
+  --serious-ink: #c2410c;
+  --critical-ink: #b91c1c;
+  --info-ink: #1d4ed8;
+  --elevation-1: 0 1px 2px rgb(17 24 39 / 0.04);
+  --elevation-2: 0 1px 2px rgb(17 24 39 / 0.04), 0 4px 12px -4px rgb(17 24 39 / 0.08);
+  --elevation-3: 0 2px 6px rgb(17 24 39 / 0.04), 0 16px 40px -12px rgb(17 24 39 / 0.18);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0a0b0d;
+  --panel: #0a0b0d;
+  --card: #121317;
+  --inset: #17181c;
+  --hover: rgb(255 255 255 / 0.05);
+  --selected: rgb(255 255 255 / 0.08);
+  --overlay: rgb(0 0 0 / 0.6);
+  --line: rgb(255 255 255 / 0.08);
+  --line-strong: rgb(255 255 255 / 0.14);
+  --fg: #edeef0;
+  --muted: #9ba1ab;
+  --faint: #6b7079;
+  --accent: #60a5fa;
+  --accent-strong: #93c5fd;
+  --accent-soft: rgb(96 165 250 / 0.14);
+  --on-accent: #0a1020;
+  --series: #3b82f6;
+  --chart-muted: #3d434c;
+  --good: #22c55e;
+  --warning: #f59e0b;
+  --serious: #f97316;
+  --critical: #ef4444;
+  --good-ink: #4ade80;
+  --warning-ink: #fbbf24;
+  --serious-ink: #fdba74;
+  --critical-ink: #f87171;
+  --info-ink: #93c5fd;
+  --elevation-1: 0 1px 2px rgb(0 0 0 / 0.3);
+  --elevation-2: 0 1px 2px rgb(0 0 0 / 0.3), 0 6px 16px -6px rgb(0 0 0 / 0.5);
+  --elevation-3: 0 2px 6px rgb(0 0 0 / 0.3), 0 20px 48px -12px rgb(0 0 0 / 0.7);
 }
 
 html,
@@ -98,13 +126,31 @@ body {
   background: var(--page);
   color: var(--fg);
   font-family: var(--font-sans);
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-.tabular {
+::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Finer icon line for a calmer UI (base layer, so per-icon strokeWidth still wins). */
+@layer base {
+  svg.lucide {
+    stroke-width: 1.75;
+  }
+}
+
+@utility tabular {
   font-variant-numeric: tabular-nums;
 }
 
+* {
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -124,7 +170,7 @@ body {
     background-color: transparent;
   }
 }
-.row-new {
+@utility row-new {
   animation: flash 2.4s ease-out;
 }
 
@@ -137,8 +183,56 @@ body {
     opacity: 0.35;
   }
 }
-.live-dot {
-  animation: pulse-dot 1.6s ease-in-out infinite;
+@utility live-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+/* Overlay motion, keyed on Radix data-state. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes content-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+@keyframes sheet-in-right {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+@keyframes sheet-in-left {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+}
+@utility animate-overlay {
+  animation: overlay-in 160ms ease-out;
+}
+@utility animate-content {
+  animation: content-in 160ms ease-out;
+}
+@utility animate-sheet-right {
+  animation: sheet-in-right 180ms ease-out;
+}
+@utility animate-sheet-left {
+  animation: sheet-in-left 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *:not(.animate-spin),
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* React Flow theming */

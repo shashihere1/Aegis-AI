@@ -292,6 +292,19 @@ is public with S256 PKCE and exact redirect URIs. Stop the built-in `--sso` serv
 
 **Changing role means signing in as the other account.** Use the header menu: **Switch account** (or **Sign in with SSO**) first ends your Keycloak session, then shows a fresh login form, so you pick the account. (Keycloak otherwise keeps you signed in and would silently log you straight back in as the previous account, and even `prompt=login` only re-asks that same user's password.) Choosing a demo persona from the menu while signed in with SSO also ends the Keycloak session. Token expiry renews silently. For a fast demo keep two browser windows, one signed in per role, or use the persona switcher.
 
+**Username + password form (opt-in).** By default the console signs in by redirect (authorization code + PKCE) and the
+`aegis-console` client has direct password login **off**. To let the console's own sign-in form take a username and
+password and check it against Keycloak (the password goes to Keycloak's token endpoint, never to the Aegis API), turn
+it on, either when creating the realm or on a running one:
+
+```powershell
+.venv\Scripts\python -m aegis_demo.keycloak_setup start --console-password-login   # new realm
+.venv\Scripts\python -m aegis_demo.keycloak_setup enable-password-login            # running realm
+.venv\Scripts\python -m aegis_demo.keycloak_setup disable-password-login           # back to redirect-only
+```
+
+This uses the OAuth password grant, which current OAuth guidance discourages; keep it to local demos.
+
 The env script sets `AEGIS_OIDC_ONE_ROLE_PER_ACCOUNT=true`: Aegis then **refuses any sign-in whose token holds more than
 one Aegis role** (with a message telling the user to use a separate account per role). The demo personas of the built-in
 dev IdP are unaffected. `keycloak_setup accounts` prints this directory; `keycloak_setup ensure-role-identities` upgrades

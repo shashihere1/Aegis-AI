@@ -1,17 +1,16 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, ClipboardCheck, Play, ShieldX, UserCog, UserX } from "lucide-react";
 import { api, post } from "../lib/api";
 import { useSession } from "../lib/session";
 import { useToast } from "../lib/toast";
 import type { Agent, AgentPage, AttestationStatus } from "../lib/types";
-import { Avatar, Button, Card, EmptyState, Field, Loading, Modal, PageHeader, Select, StatusPill, Td, TextInput, Th, Tabs } from "../components/ui";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/shadcn/tooltip";
+import { Avatar, Button, Callout, Card, EmptyState, ErrorState, Field, Modal, PageHeader, RowLink, Select, SkeletonRows, Stat, StatGroup, StatusPill, TBody, THead, Table, Tabs, Td, TextInput, Th, Tr, cx, focusRing } from "../components/ui";
 
 export function Attestation() {
   const { persona, personas } = useSession();
   const toast = useToast();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<"due" | "orphaned">("due");
   const [leaver, setLeaver] = useState(false);
@@ -61,7 +60,6 @@ export function Attestation() {
   return (
     <>
       <PageHeader
-        icon={ClipboardCheck}
         title="Re-attestation"
         subtitle="Owners periodically confirm each agent is still needed, correctly scoped and owned"
         actions={
@@ -81,78 +79,119 @@ export function Attestation() {
           </>
         }
       />
-      {s && (
-        <div className="mb-4 rounded-xl border border-line bg-inset px-4 py-3 text-sm">
-          <div className="text-muted">{schedule}</div>
-          <div className="mt-1 text-xs text-faint">
-            {s.active_agents} active agents · {s.due} due · {s.overdue} overdue · {s.orphaned} orphaned
-            {s.next_due ? ` · next deadline ${new Date(s.next_due).toLocaleDateString()}` : ""}
-          </div>
-        </div>
+      {status.isError ? (
+        <Callout
+          tone="critical"
+          title="Couldn't load the attestation status"
+          className="mb-6"
+          action={
+            <Button size="sm" onClick={() => void status.refetch()}>
+              Try again
+            </Button>
+          }
+        >
+          {status.error instanceof Error ? status.error.message : "The attestation schedule is unavailable."}
+        </Callout>
+      ) : (
+        <>
+          <StatGroup className="mb-6">
+            <Stat label="Active agents" value={s ? s.active_agents : "—"} caption="In scope for attestation" />
+            <Stat label="Due" tone="warning" value={s ? s.due : "—"} caption={s?.next_due ? `Next deadline ${new Date(s.next_due).toLocaleDateString()}` : "Owner must re-confirm"} />
+            <Stat label="Overdue" tone="critical" value={s ? s.overdue : "—"} caption="Past the grace period" />
+            <Stat label="Orphaned" tone="critical" value={s ? s.orphaned : "—"} caption="Owner has left" />
+          </StatGroup>
+          {schedule && (
+            <Callout tone="info" title="Schedule" className="mb-8">
+              {schedule}
+            </Callout>
+          )}
+        </>
       )}
-      <div className="mb-4">
-        <Tabs value={tab} onChange={setTab} tabs={[{ value: "due", label: "Attestation due" }, { value: "orphaned", label: "Orphaned (owner left)" }]} />
-      </div>
-      <Card>
+      <Tabs
+        variant="underline"
+        label="Attestation view"
+        className="mb-6"
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: "due", label: "Attestation due" },
+          { value: "orphaned", label: "Orphaned (owner left)" },
+        ]}
+      />
+      <Card className="overflow-hidden">
         {list.isLoading ? (
-          <Loading />
+          <SkeletonRows cols={5} />
+        ) : list.isError ? (
+          <ErrorState title="Couldn't load agents" error={list.error} onRetry={() => void list.refetch()} />
         ) : !list.data?.items.length ? (
           <EmptyState icon={ClipboardCheck} title={tab === "due" ? "No attestations outstanding" : "No orphaned agents"}>
             Start a campaign (Sanne Bakker) or simulate an owner leaving (Platform Admin).
           </EmptyState>
         ) : (
-          <table className="w-full">
-            <thead className="border-b border-line bg-inset">
-              <tr>
-                <Th>Agent</Th>
-                <Th>Owner</Th>
-                <Th>Status</Th>
-                <Th>Due</Th>
-                <Th></Th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {list.data.items.map((a) => (
-                <tr key={a.id} className="hover:bg-hover">
-                  <Td>
-                    <button onClick={() => navigate(`/agents/${a.id}`)} className="font-medium text-accent hover:underline">
-                      {a.name}
-                    </button>
-                    {a.orphaned && <div className="text-xs text-critical-ink">Owner has left: reassign or retire</div>}
-                  </Td>
-                  <Td>
-                    <span className="flex items-center gap-2">
-                      <Avatar name={a.owner} size="sm" /> {a.owner}
-                    </span>
-                  </Td>
-                  <Td>
-                    <StatusPill status={a.status} />
-                  </Td>
-                  <Td className="text-muted">{a.attestation_due ? new Date(a.attestation_due).toLocaleDateString() : "—"}</Td>
-                  <Td className="text-right">
-                    <span className="inline-flex gap-2">
-                      <Button icon={UserCog} roles={["agent-owner", "risk-approver", "admin"]} onClick={() => setHandOver(a)}>
-                        Reassign owner
-                      </Button>
-                      <Button
-                        disabled={persona?.username !== a.owner}
-                        title={persona?.username !== a.owner ? "Only the agent's owner can attest" : undefined}
-                        loading={attest.isPending && attest.variables === a.id}
-                        onClick={() => attest.mutate(a.id)}
-                      >
-                        Attest
-                      </Button>
-                    </span>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Table>
+            <THead>
+              <Th>Agent</Th>
+              <Th>Owner</Th>
+              <Th>Status</Th>
+              <Th>Due</Th>
+              <Th>
+                <span className="sr-only">Actions</span>
+              </Th>
+            </THead>
+            <TBody>
+              {list.data.items.map((a) => {
+                const notOwner = persona?.username !== a.owner;
+                const attestButton = (
+                  <Button size="sm" disabled={notOwner} loading={attest.isPending && attest.variables === a.id} onClick={() => attest.mutate(a.id)}>
+                    Attest
+                  </Button>
+                );
+                return (
+                  <Tr key={a.id}>
+                    <Td>
+                      <RowLink to={`/agents/${a.id}`}>{a.name}</RowLink>
+                      {a.orphaned && <div className="text-xs text-critical-ink">Owner has left: reassign or retire</div>}
+                    </Td>
+                    <Td>
+                      <span className="flex items-center gap-2">
+                        <Avatar name={a.owner} size="sm" /> {a.owner}
+                      </span>
+                    </Td>
+                    <Td>
+                      <StatusPill status={a.status} />
+                    </Td>
+                    <Td className="text-muted">{a.attestation_due ? new Date(a.attestation_due).toLocaleDateString() : "—"}</Td>
+                    <Td className="text-right">
+                      <span className="inline-flex gap-2">
+                        <Button size="sm" icon={UserCog} roles={["agent-owner", "risk-approver", "admin"]} onClick={() => setHandOver(a)}>
+                          Reassign owner
+                        </Button>
+                        {notOwner ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span tabIndex={0} className={cx("inline-flex rounded-lg", focusRing)}>
+                                {attestButton}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>Only the agent's owner can attest</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          attestButton
+                        )}
+                      </span>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </TBody>
+          </Table>
         )}
       </Card>
       <Modal open={leaver} onClose={() => setLeaver(false)} title="Simulate an owner leaving the bank">
         <p className="mb-4 text-sm text-muted">The IdP sends a leaver event. Their agents become orphaned (DET-12) and must be re-attested immediately. The persona can no longer sign in for the rest of this session.</p>
-        <Select label="Owner" value={who} onChange={setWho} options={personas.map((p) => ({ value: p.username, label: p.name }))} className="w-full" />
+        <Field label="Owner">
+          <Select label="Owner" value={who} onChange={setWho} options={personas.map((p) => ({ value: p.username, label: p.name }))} className="w-full" />
+        </Field>
         <div className="mt-5 flex justify-end">
           <Button variant="danger" loading={leave.isPending} onClick={() => leave.mutate()}>
             Process leaver

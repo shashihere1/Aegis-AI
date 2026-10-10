@@ -89,7 +89,8 @@ export interface Alert {
   agent_id: string | null;
   agent_name: string | null;
   evidence: Record<string, unknown>;
-  actions_taken: { action: string; agent: string; blast_radius: BlastRadius }[];
+  // Not every playbook action has a blast radius: an orphaned-agent alert records an owner reassignment.
+  actions_taken: { action: string; agent?: string; blast_radius?: BlastRadius; from?: string; to?: string }[];
   status: string;
 }
 

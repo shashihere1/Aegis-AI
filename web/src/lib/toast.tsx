@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { CheckCircle2, ShieldAlert, X } from "lucide-react";
+import { CheckCircle2, OctagonAlert, X } from "lucide-react";
 
 type Tone = "success" | "error";
 interface ToastItem {
@@ -21,24 +21,23 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={push}>
       {children}
-      <div className="fixed right-5 bottom-24 z-50 flex w-96 flex-col gap-2" aria-live="polite">
+      {/* Above dialogs (z-40) and menus (z-50); clickable even while a dialog locks pointer events. */}
+      <div className="pointer-events-none fixed right-4 bottom-20 z-[60] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
         {items.map((t) => (
           <div
             key={t.id}
-            className="flex gap-3 rounded-xl border border-line-strong bg-card p-3.5 shadow-2xl shadow-black/30"
+            data-toast
+            className="pointer-events-auto flex gap-3 rounded-xl border border-line bg-card p-3.5 shadow-overlay"
             role={t.tone === "error" ? "alert" : "status"}
           >
-            {t.tone === "success" ? (
-              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-good-ink" />
-            ) : (
-              <ShieldAlert className="mt-0.5 size-5 shrink-0 text-critical-ink" />
-            )}
+            {t.tone === "success" ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-good-ink" /> : <OctagonAlert className="mt-0.5 size-4 shrink-0 text-critical-ink" />}
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold">{t.title}</div>
+              <div className="text-sm font-medium text-fg">{t.title}</div>
               {t.detail && <div className="mt-0.5 text-sm break-words text-muted">{t.detail}</div>}
             </div>
             <button
-              className="text-faint hover:text-fg"
+              type="button"
+              className="grid size-6 shrink-0 place-items-center rounded-md text-muted hover:bg-hover hover:text-fg focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-accent"
               onClick={() => setItems((list) => list.filter((x) => x.id !== t.id))}
               aria-label="Dismiss"
             >

@@ -111,7 +111,11 @@ def user_representation(identity: dict, password: str) -> dict:
     }
 
 
-def build_realm(demo_password: str, origins: tuple[str, ...] = DEFAULT_ORIGINS) -> dict:
+def build_realm(
+    demo_password: str,
+    origins: tuple[str, ...] = DEFAULT_ORIGINS,
+    console_password_login: bool = False,
+) -> dict:
     users = [
         {**user_representation(i, demo_password), "realmRoles": [f"{KEYCLOAK_ROLE_PREFIX}{i['role']}"]}
         for i in role_identities()
@@ -136,7 +140,9 @@ def build_realm(demo_password: str, origins: tuple[str, ...] = DEFAULT_ORIGINS) 
                 "publicClient": True,  # a browser app: no client secret, PKCE instead
                 "standardFlowEnabled": True,
                 "implicitFlowEnabled": False,
-                "directAccessGrantsEnabled": False,
+                # Off by default (the console signs in by redirect + PKCE). `--console-password-login` turns it on so
+                # the console's own username + password form can sign in directly (password grant, no redirect).
+                "directAccessGrantsEnabled": console_password_login,
                 "serviceAccountsEnabled": False,
                 "redirectUris": [f"{o}/ui/auth/callback" for o in origins],
                 "webOrigins": list(origins),
@@ -243,7 +249,7 @@ def stop() -> None:
         print("No Keycloak started by this tool.")
 
 
-def start(zip_path: Path, origins: tuple[str, ...]) -> None:
+def start(zip_path: Path, origins: tuple[str, ...], console_password_login: bool = False) -> None:
     if ready():
         print(f"Keycloak is already running: {ISSUER}")
         ensure_control_plane()  # upgrades a realm created before agent identities existed
@@ -254,7 +260,8 @@ def start(zip_path: Path, origins: tuple[str, ...]) -> None:
     secrets_ = credentials()
     realm_file = install_dir() / "data" / "import" / f"{REALM}-realm.json"
     realm_file.parent.mkdir(parents=True, exist_ok=True)
-    realm_file.write_text(json.dumps(build_realm(secrets_["demo_password"], origins), indent=2), encoding="utf-8")
+    realm = build_realm(secrets_["demo_password"], origins, console_password_login)
+    realm_file.write_text(json.dumps(realm, indent=2), encoding="utf-8")
     environment = os.environ | {
         "JAVA_HOME": java_home,
         "KC_BOOTSTRAP_ADMIN_USERNAME": "admin",
@@ -390,6 +397,15 @@ def ensure_role_identities() -> dict[str, list[str]]:
     return report
 
 
+def set_console_password_login(enabled: bool) -> None:
+    """Turn the console's direct username + password sign-in on or off on the running realm."""
+    http = admin_session()
+    (client,) = http.get("/clients", params={"clientId": CLIENT_ID}).json()
+    client["directAccessGrantsEnabled"] = enabled
+    checked(http.put(f"/clients/{client['id']}", json=client), "update the console client")
+    print(f"Console password sign-in is now {'ON' if enabled else 'OFF'} for client {CLIENT_ID}.")
+
+
 def print_accounts() -> None:
     """The directory of role accounts (no passwords)."""
     rows = role_identities()
@@ -470,6 +486,8 @@ def main() -> None:
             "ensure-role-identities",
             "accounts",
             "clean-agents",
+            "enable-password-login",
+            "disable-password-login",
         ],
     )
     parser.add_argument("--zip", type=Path, default=DEFAULT_ZIP, help="Keycloak server zip")
@@ -479,10 +497,19 @@ def main() -> None:
         dest="origins",
         help="console origin allowed to sign in (repeatable; default: localhost 8000 and 5173)",
     )
+    parser.add_argument(
+        "--console-password-login",
+        action="store_true",
+        help="with `start`: let the console's own username + password form sign in directly (password grant)",
+    )
     args = parser.parse_args()
     origins = tuple(args.origins) if args.origins else DEFAULT_ORIGINS
-    if args.action == "start":
-        start(args.zip, origins)
+    if args.action == "enable-password-login":
+        set_console_password_login(True)
+    elif args.action == "disable-password-login":
+        set_console_password_login(False)
+    elif args.action == "start":
+        start(args.zip, origins, args.console_password_login)
         print(f"Settings written to {write_env()}")
     elif args.action == "ensure-control-plane":
         ensure_control_plane()

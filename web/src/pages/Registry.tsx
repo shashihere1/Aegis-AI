@@ -1,39 +1,51 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Bot, ChevronLeft, ChevronRight, ClipboardCheck, Download, Ghost, LayoutGrid, Plus, Search, Siren } from "lucide-react";
+import { Download, Plus, Search, X } from "lucide-react";
 import { api } from "../lib/api";
-import { compact, timeAgo, titleCase } from "../lib/format";
+import { compact, titleCase } from "../lib/format";
 import { useFindings, useStats } from "../lib/queries";
 import type { AgentPage } from "../lib/types";
 import {
   Avatar,
   Button,
   Card,
+  Chip,
   CopyButton,
   DataClassPill,
   EmptyState,
-  Kpi,
-  Loading,
+  ErrorState,
+  FilterSelect,
   PageHeader,
+  Pagination,
   RiskPill,
-  Select,
+  RowLink,
+  SearchInput,
+  SkeletonRows,
+  Stat,
+  StatGroup,
   StatusPill,
+  TBody,
+  THead,
+  Table,
+  TableToolbar,
   Td,
-  TextInput,
   Th,
+  TimeAgo,
+  Tr,
 } from "../components/ui";
 import { RegisterAgentModal } from "./RegisterAgent";
 
 const PAGE = 25;
 const CLOUD_LABEL: Record<string, string> = { azure: "Azure", aws: "AWS", gcp: "GCP", "on-prem": "On-prem" };
 
-const filters = {
-  cloud: [{ value: "", label: "All clouds" }, ...["azure", "aws", "gcp", "on-prem"].map((v) => ({ value: v, label: CLOUD_LABEL[v] }))],
-  status: [{ value: "", label: "All statuses" }, ...["active", "pending_approval", "draft", "suspended", "discovered", "retired"].map((v) => ({ value: v, label: titleCase(v) }))],
-  environment: [{ value: "", label: "All environments" }, ...["PRD", "ACC", "TST", "DEV"].map((v) => ({ value: v, label: v }))],
-  data_class: [{ value: "", label: "All data classes" }, ...["public", "internal", "confidential", "restricted"].map((v) => ({ value: v, label: titleCase(v) }))],
-};
+const FILTERS = [
+  { key: "status", label: "Status", options: ["active", "pending_approval", "draft", "suspended", "discovered", "retired"].map((v) => ({ value: v, label: titleCase(v) })) },
+  { key: "cloud", label: "Cloud", options: ["azure", "aws", "gcp", "on-prem"].map((v) => ({ value: v, label: CLOUD_LABEL[v] })) },
+  { key: "environment", label: "Environment", options: ["PRD", "ACC", "TST", "DEV"].map((v) => ({ value: v, label: v })) },
+  { key: "data_class", label: "Data class", options: ["public", "internal", "confidential", "restricted"].map((v) => ({ value: v, label: titleCase(v) })) },
+] as const;
+type FilterKey = (typeof FILTERS)[number]["key"];
 
 function useDebounced<T>(value: T, ms = 250): T {
   const [v, setV] = useState(value);
@@ -48,12 +60,25 @@ export function Registry() {
   const navigate = useNavigate();
   const stats = useStats().data;
   const findings = useFindings().data ?? [];
+  // Filters live in the URL, so other screens can deep-link (e.g. /agents?status=pending_approval).
+  const [params, setParams] = useSearchParams();
+  const f = Object.fromEntries(FILTERS.map(({ key }) => [key, params.get(key) ?? ""])) as Record<FilterKey, string>;
+  const setFilter = (key: FilterKey, value: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
   const [q, setQ] = useState("");
-  const [f, setF] = useState({ cloud: "", status: "", environment: "", data_class: "" });
   const [page, setPage] = useState(0);
   const [registering, setRegistering] = useState(false);
   const search = useDebounced(q);
-  useEffect(() => setPage(0), [search, f]);
+  const filterKey = JSON.stringify(f);
+  useEffect(() => setPage(0), [search, filterKey]);
 
   const list = useQuery({
     queryKey: ["agents", search, f, page],
@@ -73,89 +98,103 @@ export function Registry() {
 
   const openFindings = findings.filter((x) => x.status === "open").length;
   const total = list.data?.total ?? 0;
+  const filtered = !!search || FILTERS.some(({ key }) => f[key]);
 
   return (
     <>
       <PageHeader
-        icon={LayoutGrid}
-        title="Agent Registry"
-        subtitle="Monitor and govern all AI agents across your organisation"
+        title="Agent registry"
+        subtitle="Every AI agent in the organisation, with its owner, data ceiling and risk."
         actions={
-          <Button variant="primary" icon={Plus} roles={["agent-developer", "admin"]} onClick={() => setRegistering(true)}>
-            Register Agent
-          </Button>
+          <>
+            <Button icon={Download} onClick={exportCsv}>
+              Export CSV
+            </Button>
+            <Button variant="primary" icon={Plus} roles={["agent-developer", "admin"]} onClick={() => setRegistering(true)}>
+              Register agent
+            </Button>
+          </>
         }
       />
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi icon={Bot} label="Total agents" value={stats ? compact(stats.total) : "—"} hint={stats && `${compact(stats.by_status.active ?? 0)} active`} />
-        <Kpi
-          icon={Ghost}
-          tone="warning"
-          label="Shadow agents"
-          value={stats ? stats.shadow + openFindings : "—"}
-          hint="View & resolve"
-          onClick={() => navigate("/shadow")}
-        />
-        <Kpi icon={ClipboardCheck} tone="warning" label="Pending attestation" value={stats?.pending_attestation ?? "—"} hint="Action needed" onClick={() => navigate("/attestation")} />
-        <Kpi icon={Siren} tone="critical" label="Active alerts" value={stats?.active_alerts ?? "—"} hint="View alerts" onClick={() => navigate("/alerts")} />
-      </div>
 
-      <Card className="mb-4 p-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-72 flex-1">
-            <Search className="absolute top-3 left-3 size-4 text-faint" />
-            <TextInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agents, owners, IDs…" className="pl-9" />
-          </div>
-          {(Object.keys(filters) as (keyof typeof filters)[]).map((key) => (
-            <Select key={key} label={key} value={f[key]} onChange={(v) => setF({ ...f, [key]: v })} options={filters[key]} className="min-w-44" />
-          ))}
-          <Button icon={Download} onClick={exportCsv}>
-            Export CSV
+      <StatGroup className="mb-8">
+        <Stat label="Total agents" value={stats ? compact(stats.total) : "—"} caption={stats ? `${compact(stats.by_status.active ?? 0)} active` : " "} />
+        <Stat label="Shadow agents" tone="warning" value={stats ? stats.shadow + openFindings : "—"} caption="Unregistered, needs an owner" to="/shadow" />
+        <Stat label="Pending attestation" tone="warning" value={stats?.pending_attestation ?? "—"} caption="Owner must re-confirm" to="/attestation" />
+        <Stat label="Active alerts" tone="critical" value={stats?.active_alerts ?? "—"} caption="Untriaged detections" to="/alerts" />
+      </StatGroup>
+
+      <TableToolbar
+        end={
+          list.data && (
+            <span className="tabular">
+              {total.toLocaleString()} agent{total === 1 ? "" : "s"}
+            </span>
+          )
+        }
+      >
+        <SearchInput label="Search agents" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, owner or ID…" className="w-full sm:w-72" />
+        {FILTERS.map(({ key, label, options }) => (
+          <FilterSelect key={key} label={label} value={f[key]} onChange={(v) => setFilter(key, v)} options={[...options]} />
+        ))}
+        {filtered && (
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={X}
+            onClick={() => {
+              setQ("");
+              setParams({}, { replace: true });
+            }}
+          >
+            Clear
           </Button>
-        </div>
-      </Card>
+        )}
+      </TableToolbar>
 
       <Card className="overflow-hidden">
         {list.isLoading ? (
-          <Loading />
+          <SkeletonRows cols={6} />
+        ) : list.isError ? (
+          <ErrorState title="Couldn't load agents" error={list.error} onRetry={() => void list.refetch()} />
         ) : !list.data?.items.length ? (
-          <EmptyState icon={Search} title="No agents match these filters" />
+          <EmptyState icon={Search} title={filtered ? "No agents match these filters" : "No agents registered yet"}>
+            {filtered ? "Try a different search or clear the filters." : "Register the first agent to start governing it."}
+          </EmptyState>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="border-b border-line bg-inset">
-                <tr>
-                  <Th>Agent name</Th>
-                  <Th>Aegis ID</Th>
-                  <Th>Cloud</Th>
-                  <Th>Owner</Th>
-                  <Th>Status</Th>
-                  <Th>Data class</Th>
-                  <Th>Risk</Th>
-                  <Th>Last active</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
+          <div className={list.isPlaceholderData ? "opacity-60 transition-opacity" : undefined}>
+            <Table>
+              <THead>
+                <Th>Agent</Th>
+                <Th>Aegis ID</Th>
+                <Th>Cloud</Th>
+                <Th>Owner</Th>
+                <Th>Status</Th>
+                <Th>Data class</Th>
+                <Th>Risk</Th>
+                <Th>Last active</Th>
+              </THead>
+              <TBody>
                 {list.data.items.map((a) => (
-                  <tr key={a.id} onClick={() => navigate(`/agents/${a.id}`)} className="cursor-pointer hover:bg-hover">
+                  <Tr key={a.id} onClick={() => navigate(`/agents/${a.id}`)}>
                     <Td>
-                      <div className="font-medium text-accent">{a.name}</div>
-                      <div className="text-xs text-faint">
+                      <RowLink to={`/agents/${a.id}`}>{a.name}</RowLink>
+                      <div className="text-caption text-muted">
                         {a.framework} · {a.environment}
                       </div>
                     </Td>
                     <Td>
-                      <span className="inline-flex items-center gap-2 font-mono text-xs text-muted">
+                      <span className="inline-flex items-center gap-1.5 font-mono text-xs text-muted">
                         {a.id} <CopyButton value={a.id} />
                       </span>
                     </Td>
                     <Td>
-                      <span className="rounded-md border border-line bg-inset px-2 py-0.5 text-xs font-medium">{CLOUD_LABEL[a.cloud] ?? a.cloud}</span>
+                      <Chip>{CLOUD_LABEL[a.cloud] ?? a.cloud}</Chip>
                     </Td>
                     <Td>
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2">
                         <Avatar name={a.owner} size="sm" />
-                        <span>{a.owner}</span>
+                        <span className="whitespace-nowrap">{a.owner}</span>
                       </div>
                     </Td>
                     <Td>
@@ -167,26 +206,16 @@ export function Registry() {
                     <Td>
                       <RiskPill tier={a.risk_tier} />
                     </Td>
-                    <Td className="text-muted">{timeAgo(a.last_active_at)}</Td>
-                  </tr>
+                    <Td className="text-muted">
+                      <TimeAgo value={a.last_active_at} />
+                    </Td>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           </div>
         )}
-        <div className="flex items-center justify-between border-t border-line px-4 py-3 text-sm text-muted">
-          <span className="tabular">
-            {total ? `${page * PAGE + 1}–${Math.min(total, (page + 1) * PAGE)} of ${total.toLocaleString()}` : "0 agents"}
-          </span>
-          <div className="flex gap-2">
-            <Button variant="ghost" icon={ChevronLeft} disabled={page === 0} onClick={() => setPage(page - 1)}>
-              Previous
-            </Button>
-            <Button variant="ghost" disabled={(page + 1) * PAGE >= total} onClick={() => setPage(page + 1)}>
-              Next <ChevronRight className="size-4" />
-            </Button>
-          </div>
-        </div>
+        <Pagination page={page} pageSize={PAGE} total={total} onPage={setPage} noun="agents" />
       </Card>
       <RegisterAgentModal open={registering} onClose={() => setRegistering(false)} />
     </>

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
+import { Command } from "cmdk";
 import {
   Activity,
   BadgeCheck,
@@ -8,16 +9,17 @@ import {
   BookLock,
   Bot,
   ChevronDown,
-  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Coins,
   Ghost,
   GitFork,
   KeyRound,
+  LayoutDashboard,
   LayoutGrid,
   LogOut,
+  Menu,
   MessageSquare,
-  MonitorDot,
   Moon,
   Plug,
   Repeat,
@@ -30,10 +32,20 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { useAlerts, useFindings, usePendingApprovals, useStats } from "../lib/queries";
+import { APPROVAL_READERS, isUnresolved, useAlerts, useFindings, useLedgerVerify, usePendingApprovals, useStats } from "../lib/queries";
 import { useSession } from "../lib/session";
+import { useTheme } from "../lib/theme";
 import type { AgentPage } from "../lib/types";
-import { Avatar, cx } from "./ui";
+import { Avatar, IconButton, Kbd, cx, focusRing } from "./ui";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./shadcn/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./shadcn/dropdown-menu";
 import { CopilotLauncher } from "../pages/Copilot";
 
 interface NavItem {
@@ -44,348 +56,357 @@ interface NavItem {
   tone?: "warning" | "critical";
 }
 
-function useNav(): { section: string; items: NavItem[] }[] {
+function useNav(): { section: string | null; items: NavItem[] }[] {
   const { can } = useSession();
   const stats = useStats().data;
   const alerts = useAlerts().data ?? [];
   const findings = useFindings().data ?? [];
-  const approvals = usePendingApprovals().data ?? [];
-  const open = alerts.filter((a) => a.status === "new");
-  const injections = open.filter((a) => a.rule_id === "DET-01").length;
+  const approvals = usePendingApprovals(can(...APPROVAL_READERS)).data ?? [];
+  const fresh = alerts.filter((a) => a.status === "new");
+  const criticalOpen = alerts.filter((a) => isUnresolved(a) && a.severity === "critical").length;
+  const injections = fresh.filter((a) => a.rule_id === "DET-01").length;
   const shadow = findings.filter((f) => f.status === "open").length;
   return [
+    { section: null, items: [{ to: "/overview", label: "Overview", icon: LayoutDashboard, badge: criticalOpen, tone: "critical" }] },
     {
-      section: "Registry",
+      section: "Agents",
       items: [
-        { to: "/agents", label: "Agent Registry", icon: LayoutGrid },
-        { to: "/shadow", label: "Shadow Agents", icon: Ghost, badge: shadow, tone: "warning" },
+        { to: "/agents", label: "Agent registry", icon: LayoutGrid },
+        { to: "/shadow", label: "Shadow agents", icon: Ghost, badge: shadow, tone: "warning" },
         { to: "/attestation", label: "Re-attestation", icon: ClipboardCheck, badge: stats?.pending_attestation, tone: "warning" },
         { to: "/activity", label: "Activity", icon: Activity },
       ],
     },
     {
-      section: "Observability",
+      section: "Detect & respond",
       items: [
-        { to: "/soc", label: "SOC Dashboard", icon: MonitorDot, badge: open.length, tone: "critical" },
-        { to: "/alerts", label: "Alert Management", icon: TriangleAlert },
-        { to: "/lineage", label: "Agent Lineage", icon: GitFork },
-        { to: "/injection", label: "Prompt Injection", icon: ShieldAlert, badge: injections, tone: "critical" },
-        { to: "/usage", label: "Usage & Cost", icon: Coins },
-        ...(can("soc-analyst", "auditor") ? [{ to: "/copilot", label: "Investigation Copilot", icon: Bot }] : []),
+        { to: "/alerts", label: "Alerts", icon: TriangleAlert, badge: fresh.length, tone: "critical" },
+        { to: "/injection", label: "Prompt injection", icon: ShieldAlert, badge: injections, tone: "critical" },
+        { to: "/lineage", label: "Agent lineage", icon: GitFork },
+        ...(can("soc-analyst", "auditor") ? [{ to: "/copilot", label: "Investigation copilot", icon: Bot }] : []),
       ],
     },
     {
-      section: "Access Control",
+      section: "Access",
       items: [
-        { to: "/access", label: "Agent Access Control", icon: KeyRound },
+        { to: "/access", label: "Access control", icon: KeyRound },
         { to: "/approvals", label: "Approvals", icon: BadgeCheck, badge: approvals.length, tone: "warning" },
-        { to: "/tools", label: "MCP Servers & Tools", icon: Plug },
-        { to: "/policies", label: "Policy Governance", icon: BookLock },
+        { to: "/tools", label: "MCP servers & tools", icon: Plug },
+        { to: "/policies", label: "Policies", icon: BookLock },
       ],
     },
     {
       section: "Assurance",
       items: [
-        { to: "/evidence", label: "Audit Ledger", icon: ShieldCheck },
-        { to: "/assistant", label: "Bank Assistant", icon: MessageSquare },
+        { to: "/evidence", label: "Audit ledger", icon: ShieldCheck },
+        { to: "/usage", label: "Usage & cost", icon: Coins },
       ],
     },
+    { section: "Assistant", items: [{ to: "/assistant", label: "Bank assistant", icon: MessageSquare }] },
   ];
 }
 
-function Sidebar() {
-  const { can } = useSession();
-  return can("customer") ? <CustomerSidebar /> : <StaffSidebar />;
+function Brand({ caption }: { caption: string }) {
+  return (
+    <Link to="/" className={cx("flex items-center gap-2.5 rounded-lg px-2 py-1", focusRing)}>
+      <span className="grid size-8 place-items-center rounded-lg bg-fg text-page">
+        <ShieldCheck className="size-[18px]" />
+      </span>
+      <span className="min-w-0 leading-tight">
+        <span className="block text-sm font-semibold text-fg">Aegis</span>
+        <span className="block truncate text-2xs text-muted">{caption}</span>
+      </span>
+    </Link>
+  );
 }
 
-function CustomerSidebar() {
-  return <aside className="hidden w-64 shrink-0 flex-col border-r border-line bg-panel lg:flex">
-    <div className="flex items-center gap-3 border-b border-line px-5 py-5">
-      <div className="grid size-11 place-items-center rounded-xl bg-accent-soft text-accent"><ShieldCheck className="size-6" /></div>
-      <div><div className="font-semibold">Aegis AI</div><div className="text-xs text-muted">Synthetic banking workspace</div></div>
-    </div>
-    <nav className="flex-1 p-3" aria-label="Customer navigation">
-      <div className="mb-2 px-3 pt-2 text-[11px] font-semibold tracking-wider text-faint uppercase">Your workspace</div>
-      <NavLink to="/assistant" className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent-soft px-3 py-3 text-sm font-medium text-accent">
-        <MessageSquare className="size-[18px]" />Bank Assistant
-      </NavLink>
+const navItemClass = ({ isActive }: { isActive: boolean }) =>
+  cx(
+    "group flex h-8 items-center gap-2.5 rounded-md px-2 text-sm transition-colors",
+    focusRing,
+    isActive ? "bg-selected font-medium text-fg" : "text-muted hover:bg-hover hover:text-fg",
+  );
+
+function NavList({ onNavigate }: { onNavigate?: () => void }) {
+  const nav = useNav();
+  return (
+    <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-2" aria-label="Main">
+      {nav.map((group, i) => (
+        <div key={group.section ?? i}>
+          {group.section && <div className="mb-1 px-2 text-2xs font-semibold tracking-wider text-faint uppercase">{group.section}</div>}
+          <ul className="space-y-0.5">
+            {group.items.map((item) => (
+              <li key={item.to}>
+                <NavLink to={item.to} className={navItemClass} onClick={onNavigate}>
+                  {({ isActive }) => (
+                    <>
+                      <item.icon className={cx("size-4 shrink-0", isActive ? "text-fg" : "text-faint group-hover:text-muted")} />
+                      <span className="flex-1 truncate">{item.label}</span>
+                      {!!item.badge && (
+                        <span
+                          className={cx(
+                            "tabular rounded px-1.5 text-2xs font-semibold",
+                            item.tone === "critical" ? "bg-critical/10 text-critical-ink" : "bg-warning/12 text-warning-ink",
+                          )}
+                          aria-label={`${item.badge} need attention`}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
     </nav>
-    <div className="m-3 rounded-xl border border-line bg-inset p-4">
-      <div className="flex items-center gap-2 text-xs font-medium"><ShieldCheck className="size-4 text-accent" />You're in the customer view</div>
-      <p className="mt-2 text-xs leading-relaxed text-muted">You review your actions. Staff approvals and audit records use separate roles.</p>
-    </div>
-  </aside>;
+  );
+}
+
+function SystemStatus() {
+  const ledger = useLedgerVerify();
+  const ok = ledger.data?.ok;
+  return (
+    <Link to="/evidence" className={cx("mx-3 mb-3 flex items-center gap-2 rounded-md px-2 py-2 text-caption text-muted hover:bg-hover", focusRing)}>
+      <span className={cx("size-1.5 rounded-full", ok === undefined ? "bg-faint" : ok ? "bg-good" : "bg-critical")} aria-hidden />
+      {ok === undefined ? "Checking evidence ledger…" : ok ? "Evidence ledger verified" : "Evidence ledger broken"}
+    </Link>
+  );
 }
 
 function StaffSidebar() {
-  const nav = useNav();
-  const { persona } = useSession();
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-line bg-panel">
-      <div className="flex items-center gap-3 border-b border-line px-5 py-5">
-        <div className="grid size-11 place-items-center rounded-xl bg-accent-strong text-white">
-          <ShieldCheck className="size-6" />
-        </div>
-        <div>
-          <div className="font-semibold">ABN AMRO</div>
-          <div className="text-sm text-accent">Aegis AI · Agent Foundry</div>
-        </div>
+    <aside className="hidden w-60 shrink-0 flex-col bg-panel lg:flex">
+      <div className="px-3 pt-4 pb-3">
+        <Brand caption="ABN AMRO · Agent Foundry" />
       </div>
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {nav.map((group) => (
-          <div key={group.section} className="mb-5">
-            <div className="mb-1.5 px-3 text-[11px] font-semibold tracking-[0.14em] text-faint uppercase">{group.section}</div>
-            {group.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  cx(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 text-[15px] transition",
-                    isActive ? "bg-accent-soft font-medium text-accent" : "text-muted hover:bg-hover hover:text-fg",
-                  )
-                }
-              >
-                <item.icon className="size-[18px]" />
-                <span className="flex-1">{item.label}</span>
-                {!!item.badge && (
-                  <span
-                    className={cx(
-                      "rounded-md px-1.5 py-0.5 text-xs font-semibold",
-                      item.tone === "critical" ? "bg-critical/18 text-critical-ink" : "bg-warning/18 text-warning-ink",
-                    )}
-                  >
-                    {item.badge}
-                  </span>
-                )}
-              </NavLink>
-            ))}
-          </div>
-        ))}
-      </nav>
-      {persona && (
-        <div className="m-3 flex items-center gap-3 rounded-xl border border-line bg-inset p-3">
-          <Avatar name={persona.name} />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">{persona.name}</div>
-            <div className="truncate text-xs text-muted">{persona.roles.join(", ")}</div>
-          </div>
-        </div>
-      )}
+      <NavList />
+      <SystemStatus />
     </aside>
   );
 }
 
-function PersonaSwitcher() {
-  const { personas, persona, source, config, switchTo, signIn, signOut } = useSession();
-  const [open, setOpen] = useState(false);
+function CustomerSidebar() {
+  return (
+    <aside className="hidden w-60 shrink-0 flex-col bg-panel lg:flex">
+      <div className="px-3 pt-4 pb-3">
+        <Brand caption="Synthetic banking workspace" />
+      </div>
+      <nav className="flex-1 px-3 py-2" aria-label="Customer navigation">
+        <div className="mb-1 px-2 text-2xs font-semibold tracking-wider text-faint uppercase">Your workspace</div>
+        <NavLink to="/assistant" className={navItemClass}>
+          <MessageSquare className="size-4" /> Bank assistant
+        </NavLink>
+      </nav>
+      <p className="mx-3 mb-4 rounded-lg border border-line bg-card p-3 text-caption text-muted">
+        You review your own actions. Staff approvals and audit records use separate roles.
+      </p>
+    </aside>
+  );
+}
+
+function MobileNav({ open, onClose, customer }: { open: boolean; onClose: () => void; customer: boolean }) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent side="left" className="bg-page">
+        <DialogTitle className="sr-only">Navigation</DialogTitle>
+        <DialogDescription className="sr-only">Main navigation</DialogDescription>
+        <div className="px-3 pt-4 pb-3">
+          <Brand caption={customer ? "Synthetic banking workspace" : "ABN AMRO · Agent Foundry"} />
+        </div>
+        {customer ? (
+          <nav className="px-3 py-2">
+            <NavLink to="/assistant" className={navItemClass} onClick={onClose}>
+              <MessageSquare className="size-4" /> Bank assistant
+            </NavLink>
+          </nav>
+        ) : (
+          <NavList onNavigate={onClose} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AccountMenu() {
+  const { persona, source, signOut } = useSession();
   const sso = source === "sso";
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex h-10 items-center gap-2 rounded-xl border border-accent/40 bg-accent-soft px-3 text-sm font-medium text-accent"
-        aria-haspopup="menu"
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className={cx("flex h-9 items-center gap-2 rounded-lg px-1.5 text-sm text-fg hover:bg-hover", focusRing)}
+        aria-label={`Account menu, signed in as ${persona?.name ?? "unknown"}`}
       >
-        {sso ? <KeyRound className="size-4" /> : <ShieldCheck className="size-4" />}
-        {persona?.name ?? "Sign in"}
-        <span className="hidden text-xs text-muted xl:inline">· {sso ? "SSO" : persona?.roles[0]}</span>
-        <ChevronDown className="size-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 z-30 mt-2 max-h-[80vh] w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-line-strong bg-card p-1.5 shadow-2xl" role="menu" onMouseLeave={() => setOpen(false)}>
-          {config?.oidc && !sso && (
-            <>
-              <button
-                role="menuitem"
-                onClick={() => void signIn(window.location.pathname.replace(/^\/ui/, "") || "/")}
-                className="flex w-full items-center gap-3 rounded-lg bg-accent-soft px-3 py-2.5 text-left text-sm font-medium text-accent hover:bg-hover"
-              >
-                <KeyRound className="size-4" /> Sign in with SSO
-              </button>
-              {personas.length > 0 && <div className="my-1 border-t border-line" />}
-            </>
-          )}
-          {sso && persona && (
-            <div className="px-3 py-2">
-              <div className="text-sm font-medium">{persona.name}</div>
-              <div className="text-xs text-muted">Signed in with SSO · {persona.roles.join(", ") || "no Aegis roles"}</div>
+        <Avatar name={persona?.name ?? "?"} size="sm" />
+        <span className="hidden max-w-36 truncate font-medium xl:inline">{persona?.name}</span>
+        <ChevronDown className="size-4 text-faint" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-1.5rem)]">
+        {persona && (
+          <DropdownMenuLabel className="py-2">
+            <div className="text-sm font-medium text-fg">{persona.name}</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs font-normal text-muted">
+              {sso ? <KeyRound className="size-3.5" /> : <ShieldCheck className="size-3.5" />}
+              {sso ? "Signed in with SSO" : "Demo login"} · {persona.roles.join(", ") || "no Aegis roles"}
             </div>
-          )}
-          {personas.length > 0 && (
-            <div className="px-3 py-2 text-xs text-faint">Act as a demo persona (development IdP). Each role sees and can do different things.</div>
-          )}
-          {personas.map((p) => (
-            <button
-              key={p.username}
-              role="menuitem"
-              disabled={p.status !== "active"}
-              onClick={() => {
-                setOpen(false);
-                switchTo(p.username);
-              }}
-              className={cx(
-                "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-hover disabled:opacity-40",
-                !sso && p.username === persona?.username && "bg-accent-soft",
-              )}
-            >
-              <Avatar name={p.name} size="sm" />
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium">{p.name}</div>
-                <div className="truncate text-xs text-muted">{p.status === "active" ? p.roles.join(", ") : "left the bank"}</div>
-              </div>
-            </button>
-          ))}
-          {sso && <div className="my-1 border-t border-line" />}
-          {sso && config?.oidc && (
-            <button
-              role="menuitem"
-              onClick={() => void signIn(window.location.pathname.replace(/^\/ui/, "") || "/")}
-              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-hover"
-            >
-              <Repeat className="size-4 text-accent" /> Switch account (sign in as another role)
-            </button>
-          )}
-          {sso && (
-            <button role="menuitem" onClick={signOut} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-hover">
-              <LogOut className="size-4 text-muted" /> Sign out
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+          </DropdownMenuLabel>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={signOut}>
+          <Repeat className="size-4 text-muted" /> Switch account
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={signOut}>
+          <LogOut className="size-4 text-muted" /> Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function Notifications() {
-  const approvals = usePendingApprovals().data ?? [];
+  const { can } = useSession();
+  const approvals = usePendingApprovals(can(...APPROVAL_READERS)).data ?? [];
   const alerts = (useAlerts().data ?? []).filter((a) => a.status === "new").slice(0, 5);
-  const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const count = approvals.length + alerts.length;
   return (
-    <div className="relative">
-      <button onClick={() => setOpen((v) => !v)} className="relative grid size-10 place-items-center rounded-xl text-muted hover:bg-hover hover:text-fg" aria-label="Notifications">
-        <Bell className="size-5" />
-        {count > 0 && <span className="absolute top-1 right-1 grid min-w-5 place-items-center rounded-full bg-critical px-1 text-[11px] font-bold text-white">{count}</span>}
-      </button>
-      {open && (
-        <div className="absolute right-0 z-30 mt-2 w-96 rounded-xl border border-line-strong bg-card p-1.5 shadow-2xl" onMouseLeave={() => setOpen(false)}>
-          {count === 0 && <div className="px-3 py-6 text-center text-sm text-muted">Nothing needs your attention.</div>}
-          {approvals.map((a) => (
-            <button key={a.id} onClick={() => (setOpen(false), navigate("/approvals"))} className="flex w-full gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-hover">
-              <BadgeCheck className="mt-0.5 size-4 shrink-0 text-warning-ink" />
-              <div className="text-sm">
-                <div className="font-medium">Approval needed: {a.tool}</div>
-                <div className="text-muted">{a.reasons[0]?.message}</div>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        className={cx("relative grid size-9 place-items-center rounded-lg text-muted transition-colors hover:bg-hover hover:text-fg", focusRing)}
+        aria-label={count ? `Notifications, ${count} need attention` : "Notifications"}
+      >
+        <Bell className="size-[18px]" />
+        {count > 0 && <span aria-hidden className="absolute top-2 right-2 size-2 rounded-full bg-critical ring-2 ring-page" />}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-96 max-w-[calc(100vw-1.5rem)]">
+        <DropdownMenuLabel className="text-sm font-semibold text-fg">Notifications</DropdownMenuLabel>
+        {count === 0 && <div className="px-3 pt-2 pb-6 text-center text-sm text-muted">Nothing needs your attention.</div>}
+        {approvals.map((a) => (
+          <DropdownMenuItem key={a.id} onSelect={() => navigate("/approvals")} className="items-start py-2.5">
+            <BadgeCheck className="mt-0.5 size-4 text-warning-ink" />
+            <div className="min-w-0 text-sm">
+              <div className="font-medium">Approval needed: {a.tool}</div>
+              <div className="truncate text-caption text-muted">{a.reasons[0]?.message}</div>
+            </div>
+          </DropdownMenuItem>
+        ))}
+        {alerts.map((a) => (
+          <DropdownMenuItem key={a.id} onSelect={() => navigate("/alerts")} className="items-start py-2.5">
+            <Siren className={cx("mt-0.5 size-4", a.severity === "critical" ? "text-critical-ink" : "text-serious-ink")} />
+            <div className="min-w-0 text-sm">
+              <div className="font-medium">
+                {a.rule_id} · {a.severity}
               </div>
-            </button>
-          ))}
-          {alerts.map((a) => (
-            <button key={a.id} onClick={() => (setOpen(false), navigate("/alerts"))} className="flex w-full gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-hover">
-              <Siren className={cx("mt-0.5 size-4 shrink-0", a.severity === "critical" ? "text-critical-ink" : "text-serious-ink")} />
-              <div className="text-sm">
-                <div className="font-medium">
-                  {a.rule_id} · {a.severity}
-                </div>
-                <div className="text-muted">{a.title}</div>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+              <div className="truncate text-caption text-muted">{a.title}</div>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const nav = useNav().flatMap((g) => g.items);
-  const [q, setQ] = useState("");
-  const navigate = useNavigate();
-  const input = useRef<HTMLInputElement>(null);
-  const agents = useQuery({
-    queryKey: ["palette", q],
-    queryFn: () => api<AgentPage>("/v1/agents", { query: { q, limit: 6 } }),
-    enabled: open && q.length >= 2,
-  });
-  useEffect(() => {
-    if (open) {
-      setQ("");
-      setTimeout(() => input.current?.focus(), 0);
-    }
-  }, [open]);
-  const pages = useMemo(() => nav.filter((n) => n.label.toLowerCase().includes(q.toLowerCase())), [nav, q]);
-  if (!open) return null;
-  const go = (to: string) => (onClose(), navigate(to));
   return (
-    <div className="fixed inset-0 z-50 flex justify-center bg-black/60 pt-[12vh] backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="h-fit w-full max-w-xl overflow-hidden rounded-2xl border border-line-strong bg-card shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-3 border-b border-line px-4">
-          <Search className="size-5 text-faint" />
-          <input
-            ref={input}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && onClose()}
-            placeholder="Search agents by name, ID or owner, or jump to a page…"
-            className="h-14 flex-1 bg-transparent outline-none placeholder:text-faint"
-          />
-        </div>
-        <div className="max-h-96 overflow-auto p-2">
-          {(agents.data?.items ?? []).map((a) => (
-            <button key={a.id} onClick={() => go(`/agents/${a.id}`)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-hover">
-              <Bot className="size-4 text-accent" />
-              <span className="flex-1 text-sm">{a.name}</span>
-              <span className="font-mono text-xs text-faint">{a.id}</span>
-            </button>
-          ))}
-          {pages.map((p) => (
-            <button key={p.to} onClick={() => go(p.to)} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left hover:bg-hover">
-              <p.icon className="size-4 text-muted" />
-              <span className="text-sm">{p.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="top-[14vh] max-w-xl translate-y-0">
+        <DialogTitle className="sr-only">Search</DialogTitle>
+        <DialogDescription className="sr-only">Search agents by name, ID or owner, or jump to a page</DialogDescription>
+        {open && <PaletteBody onClose={onClose} />}
+      </DialogContent>
+    </Dialog>
   );
 }
 
-const TITLES: Record<string, string> = {
-  agents: "Agent Registry",
-  shadow: "Shadow Agents",
-  attestation: "Re-attestation",
-  activity: "Activity",
-  soc: "SOC Dashboard",
-  alerts: "Alert Management",
-  lineage: "Agent Lineage",
-  injection: "Prompt Injection",
-  usage: "Usage & Cost",
-  access: "Agent Access Control",
-  approvals: "Approvals",
-  tools: "MCP Servers & Tools",
-  policies: "Policy Governance",
-  evidence: "Audit Ledger",
-  assistant: "Bank Assistant",
-};
-
-function useTheme(): [string, () => void] {
-  const [theme, setTheme] = useState(() => {
-    try {
-      return localStorage.getItem("aegis.theme") || "dark";
-    } catch {
-      return "dark";
-    }
+/** Mounted only while the palette is open, so its queries don't poll in the background. */
+function PaletteBody({ onClose }: { onClose: () => void }) {
+  const pages = useNav().flatMap((g) => g.items);
+  const [q, setQ] = useState("");
+  const navigate = useNavigate();
+  const agents = useQuery({
+    queryKey: ["palette", q],
+    queryFn: () => api<AgentPage>("/v1/agents", { query: { q, limit: 6 } }),
+    enabled: q.length >= 2,
   });
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem("aegis.theme", theme);
-    } catch {
-      /* not persisted */
-    }
-  }, [theme]);
-  return [theme, () => setTheme((t) => (t === "dark" ? "light" : "dark"))];
+  const go = (to: string) => {
+    onClose();
+    navigate(to);
+  };
+  const itemClass = "flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm text-fg data-[selected=true]:bg-hover";
+  return (
+        <Command shouldFilter={false} label="Search" className="flex flex-col">
+          <div className="flex items-center gap-3 border-b border-line px-4">
+            <Search className="size-4 text-faint" />
+            <Command.Input
+              value={q}
+              onValueChange={setQ}
+              placeholder="Search agents by name, ID or owner, or jump to a page…"
+              className="h-12 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
+            />
+            <Kbd>Esc</Kbd>
+          </div>
+          <Command.List className="max-h-96 overflow-y-auto p-2">
+            <Command.Empty className="px-3 py-6 text-center text-sm text-muted">No matches.</Command.Empty>
+            {!!agents.data?.items.length && (
+              <Command.Group heading="Agents" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-faint [&_[cmdk-group-heading]]:uppercase">
+                {agents.data.items.map((a) => (
+                  <Command.Item key={a.id} value={`agent-${a.id}`} onSelect={() => go(`/agents/${a.id}`)} className={itemClass}>
+                    <Bot className="size-4 text-muted" />
+                    <span className="flex-1 truncate">{a.name}</span>
+                    <span className="font-mono text-xs text-muted">{a.id}</span>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
+            <Command.Group heading="Pages" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-faint [&_[cmdk-group-heading]]:uppercase">
+              {pages
+                .filter((p) => p.label.toLowerCase().includes(q.toLowerCase()))
+                .map((p) => (
+                  <Command.Item key={p.to} value={`page-${p.to}`} onSelect={() => go(p.to)} className={itemClass}>
+                    <p.icon className="size-4 text-muted" />
+                    {p.label}
+                  </Command.Item>
+                ))}
+            </Command.Group>
+          </Command.List>
+        </Command>
+  );
+}
+
+/** "Agents › Agent registry" from the current path. */
+function Breadcrumb() {
+  const nav = useNav();
+  const { pathname } = useLocation();
+  const crumbs: ReactNode[] = [];
+  for (const group of nav)
+    for (const item of group.items)
+      if (pathname === item.to || pathname.startsWith(`${item.to}/`)) {
+        if (group.section) crumbs.push(<span key="s" className="text-muted">{group.section}</span>);
+        crumbs.push(
+          pathname === item.to ? (
+            <span key="p" className="font-medium text-fg">
+              {item.label}
+            </span>
+          ) : (
+            <Link key="p" to={item.to} className={cx("rounded text-muted hover:text-fg", focusRing)}>
+              {item.label}
+            </Link>
+          ),
+        );
+        if (pathname !== item.to) crumbs.push(<span key="d" className="font-medium text-fg">Detail</span>);
+      }
+  return (
+    <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 truncate text-sm md:flex">
+      {crumbs.map((c, i) => (
+        <span key={i} className="flex items-center gap-1.5">
+          {i > 0 && <ChevronRight className="size-3.5 text-faint" />}
+          {c}
+        </span>
+      ))}
+    </nav>
+  );
 }
 
 export function Layout() {
@@ -394,8 +415,10 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
-  const section = location.pathname.split("/")[1] || "agents";
+  const section = location.pathname.split("/")[1] || "overview";
+  const isMac = useMemo(() => /Mac|iPhone|iPad/.test(navigator.platform), []);
   useEffect(() => {
     if (customer && section !== "assistant") navigate("/assistant", { replace: true });
   }, [customer, section, navigate]);
@@ -411,39 +434,39 @@ export function Layout() {
   }, []);
   return (
     <div className="flex h-full">
-      <Sidebar />
+      {customer ? <CustomerSidebar /> : <StaffSidebar />}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className={cx("flex h-16 shrink-0 items-center gap-3 border-b border-line bg-panel/80 backdrop-blur", customer ? "px-3 sm:px-6" : "px-6")}>
-          <button onClick={() => navigate(-1)} className="text-faint hover:text-fg" aria-label="Back">
-            <ChevronLeft className="size-5" />
-          </button>
-          <div className={cx("flex items-center gap-2 text-sm", customer && "min-w-0 flex-1")}>
-            <span className={cx("text-muted", customer && "hidden xl:inline")}>ABN AMRO</span>
-            <span className={cx("text-faint", customer && "hidden xl:inline")}>›</span>
-            <span className={cx("text-muted", customer && "hidden sm:inline")}>Aegis AI</span>
-            <span className={cx("text-faint", customer && "hidden sm:inline")}>›</span>
-            <span className={cx("font-semibold", customer && "truncate")}>{TITLES[section] ?? "Agent"}</span>
-          </div>
-          {!customer && <button
-            onClick={() => setPaletteOpen(true)}
-            className="mx-auto flex h-10 w-full max-w-md items-center gap-2 rounded-xl border border-line-strong bg-inset px-3 text-sm text-faint hover:border-accent/50"
-          >
-            <Search className="size-4" />
-            <span className="flex-1 text-left">Search agents, owners, IDs…</span>
-            <kbd className="rounded border border-line-strong px-1.5 text-xs">Ctrl K</kbd>
-          </button>}
-          <PersonaSwitcher />
+        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-line bg-page/85 px-4 backdrop-blur sm:px-6">
+          <IconButton label="Open navigation" icon={Menu} className="lg:hidden" onClick={() => setMenuOpen(true)} />
+          {!customer && <Breadcrumb />}
+          <div className="flex-1" />
+          {!customer && (
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className={cx(
+                "flex h-9 w-full max-w-72 items-center gap-2 rounded-lg border border-line-strong bg-card px-3 text-sm text-faint shadow-card transition-colors hover:text-muted",
+                focusRing,
+              )}
+            >
+              <Search className="size-4" />
+              <span className="flex-1 truncate text-left">Search…</span>
+              <span className="hidden sm:inline">
+                <Kbd>{isMac ? "⌘K" : "Ctrl K"}</Kbd>
+              </span>
+            </button>
+          )}
           {!customer && <Notifications />}
-          <button onClick={toggleTheme} className="grid size-10 place-items-center rounded-xl text-muted hover:bg-hover hover:text-fg" aria-label="Toggle theme">
-            {theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
-          </button>
+          <IconButton label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"} icon={theme === "dark" ? Sun : Moon} onClick={toggleTheme} />
+          <AccountMenu />
         </header>
-        <main className={cx("min-h-0 flex-1 overflow-y-auto", section === "assistant" ? "px-3 py-5 sm:px-6 lg:px-8 lg:py-7" : "px-8 py-7")}>
-          <div className="mx-auto max-w-[1500px]">
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <div className={cx("mx-auto max-w-[1440px]", section === "assistant" ? "px-3 py-6 sm:px-6 lg:px-8" : "px-4 py-8 sm:px-6 lg:px-10")}>
             <Outlet />
           </div>
         </main>
       </div>
+      <MobileNav open={menuOpen} onClose={() => setMenuOpen(false)} customer={customer} />
       {!customer && <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />}
       {!customer && section !== "copilot" && can("soc-analyst", "auditor") && <CopilotLauncher key={persona?.username} />}
     </div>

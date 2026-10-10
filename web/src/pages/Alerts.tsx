@@ -1,121 +1,182 @@
-import { useState } from "react";
-import { Link } from "react-router";
-import { Ban, TriangleAlert } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
+import { ShieldCheck } from "lucide-react";
 import { useAlerts } from "../lib/queries";
+import { DETECTIONS, responseSummary } from "../lib/alerts";
 import { Investigation } from "../components/Investigation";
-import { clock, timeAgo, titleCase } from "../lib/format";
+import { clock, titleCase } from "../lib/format";
 import type { Alert } from "../lib/types";
-import { Card, Drawer, EmptyState, JsonBlock, Loading, PageHeader, Select, SeverityPill, StatusPill, Td, Th } from "../components/ui";
+import {
+  Callout,
+  Card,
+  Drawer,
+  EmptyState,
+  ErrorState,
+  FilterSelect,
+  JsonBlock,
+  PageHeader,
+  RowLink,
+  SearchInput,
+  SeverityPill,
+  SkeletonRows,
+  StatusPill,
+  TBody,
+  THead,
+  Table,
+  TableToolbar,
+  Tabs,
+  Td,
+  Th,
+  TimeAgo,
+  Tr,
+  cx,
+  focusRing,
+} from "../components/ui";
 
-const DETECTIONS: Record<string, string> = {
-  "DET-01": "Prompt injection detected in tool output",
-  "DET-02": "Exfiltration attempt blocked (lethal trifecta)",
-  "DET-03": "Tool definition drift (possible rug pull)",
-  "DET-04": "Burst of denied actions",
-  "DET-05": "Revoked or expired mandate presented",
-  "DET-07": "Unregistered agent activity",
-  "DET-08": "Call-rate deviation from the observed baseline",
-  "DET-09": "First-time tool use relative to recorded history",
-  "DET-12": "Orphaned agent (owner left)",
-  "DET-13": "Adaptive risk reached the critical tier",
-  "DET-14": "Agent attestation overdue (owner has not re-confirmed)",
-};
+const SEVERITIES = ["critical", "high", "medium", "low"] as const;
+const STATUSES = [
+  { value: "unresolved", label: "Unresolved" },
+  ...["new", "triage", "investigating", "resolved", "false_positive"].map((v) => ({ value: v, label: titleCase(v) })),
+];
+const UNRESOLVED = new Set(["new", "triage", "investigating"]);
 
 export function Alerts() {
   const alerts = useAlerts();
-  const [severity, setSeverity] = useState("");
-  const [status, setStatus] = useState("");
-  const [open, setOpen] = useState<Alert | null>(null);
-  const rows = (alerts.data ?? []).filter((a) => (!severity || a.severity === severity) && (!status || a.status === status));
+  const [params, setParams] = useSearchParams();
+  const severity = params.get("severity") ?? "all";
+  const status = params.get("status") ?? "unresolved";
+  const [q, setQ] = useState("");
+  const [openId, setOpenId] = useState<string | null>(params.get("alert"));
+  const set = (key: string, value: string, fallback: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value === fallback) next.delete(key);
+        else next.set(key, value);
+        return next;
+      },
+      { replace: true },
+    );
+
+  const all = alerts.data ?? [];
+  const byStatus = useMemo(() => all.filter((a) => (status === "" ? true : status === "unresolved" ? UNRESOLVED.has(a.status) : a.status === status)), [all, status]);
+  const counts = Object.fromEntries(SEVERITIES.map((s) => [s, byStatus.filter((a) => a.severity === s).length]));
+  const needle = q.trim().toLowerCase();
+  const rows = byStatus.filter(
+    (a) =>
+      (severity === "all" || a.severity === severity) &&
+      (!needle || [a.title, a.rule_id, a.agent_name ?? "", DETECTIONS[a.rule_id] ?? ""].some((x) => x.toLowerCase().includes(needle))),
+  );
+  const open: Alert | undefined = all.find((a) => a.id === openId);
 
   return (
     <>
-      <PageHeader icon={TriangleAlert} title="Alert Management" subtitle="Detections raised by the SOC engine, with the response the playbook already took" />
-      <Card className="mb-4 flex flex-wrap gap-3 p-4">
-        <Select label="Severity" value={severity} onChange={setSeverity} options={[{ value: "", label: "All severities" }, ...["critical", "high", "medium", "low"].map((v) => ({ value: v, label: titleCase(v) }))]} />
-        <Select label="Status" value={status} onChange={setStatus} options={[{ value: "", label: "All statuses" }, ...["new", "triage", "investigating", "resolved", "false_positive"].map((v) => ({ value: v, label: titleCase(v) }))]} />
-        <div className="ml-auto self-center text-sm text-muted">{rows.length} alerts</div>
-      </Card>
-      <Card className="overflow-x-auto">
+      <PageHeader title="Alerts" subtitle="Detections raised by the SOC engine, and the response the playbook already took." />
+
+      <TableToolbar end={<span className="tabular">{rows.length} shown{all.length >= 200 ? " · newest 200" : ""}</span>}>
+        <Tabs
+          label="Severity"
+          value={severity}
+          onChange={(v) => set("severity", v, "all")}
+          tabs={[{ value: "all", label: "All", count: byStatus.length }, ...SEVERITIES.map((s) => ({ value: s, label: titleCase(s), count: counts[s] }))]}
+        />
+        <FilterSelect label="Status" value={status} onChange={(v) => set("status", v, "unresolved")} options={STATUSES} allLabel="Any" />
+        <SearchInput label="Search alerts" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search detections or agents…" className="w-full sm:w-64" />
+      </TableToolbar>
+
+      <Card className="overflow-hidden">
         {alerts.isLoading ? (
-          <Loading />
+          <SkeletonRows cols={5} />
+        ) : alerts.isError ? (
+          <ErrorState title="Couldn't load alerts" error={alerts.error} onRetry={() => void alerts.refetch()} />
         ) : !rows.length ? (
-          <EmptyState icon={TriangleAlert} title="No alerts">
-            Alerts appear when Aegis detects suspicious requests or tool-definition drift.
+          <EmptyState icon={ShieldCheck} title={all.length ? "No alerts match these filters" : "No alerts"}>
+            {all.length ? "Change the severity or status filter to see more." : "Alerts appear when Aegis detects suspicious requests or tool-definition drift."}
           </EmptyState>
         ) : (
-          <table className="w-full">
-            <thead className="border-b border-line bg-inset">
-              <tr>
-                <Th>Severity</Th>
-                <Th>Detection</Th>
-                <Th>Agent</Th>
-                <Th>Response</Th>
-                <Th>Raised</Th>
-                <Th>Status</Th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {rows.map((a) => (
-                <tr key={a.id} onClick={() => setOpen(a)} className="cursor-pointer hover:bg-hover">
-                  <Td>
-                    <SeverityPill severity={a.severity} />
-                  </Td>
-                  <Td>
-                    <div className="font-medium">{a.title}</div>
-                    <div className="font-mono text-xs text-faint">
-                      {a.rule_id} · {DETECTIONS[a.rule_id] ?? ""}
-                    </div>
-                  </Td>
-                  <Td>{a.agent_id ? <Link to={`/agents/${a.agent_id}`} onClick={(e) => e.stopPropagation()} className="hover:text-accent">{a.agent_name ?? a.agent_id}</Link> : "—"}</Td>
-                  <Td>
-                    {a.actions_taken.length ? (
-                      <span className="inline-flex items-center gap-1.5 text-sm text-critical-ink">
-                        <Ban className="size-4" /> Suspended + {a.actions_taken[0].blast_radius.mandates.length} mandates revoked
-                      </span>
-                    ) : (
-                      <span className="text-sm text-faint">—</span>
-                    )}
-                  </Td>
-                  <Td className="text-muted">{timeAgo(a.ts)}</Td>
-                  <Td>
-                    <StatusPill status={a.status} />
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <Table>
+            <THead>
+              <Th>Severity</Th>
+              <Th>Detection</Th>
+              <Th>Agent</Th>
+              <Th>Automatic response</Th>
+              <Th>Raised</Th>
+              <Th>Status</Th>
+            </THead>
+            <TBody>
+              {rows.map((a) => {
+                const response = responseSummary(a);
+                return (
+                  <Tr key={a.id} onClick={() => setOpenId(a.id)}>
+                    <Td>
+                      <SeverityPill severity={a.severity} />
+                    </Td>
+                    <Td className="max-w-md">
+                      <RowLink onClick={() => setOpenId(a.id)}>{a.title}</RowLink>
+                      <div className="mt-0.5 truncate text-caption text-muted">
+                        <span className="font-mono">{a.rule_id}</span>
+                        {DETECTIONS[a.rule_id] && ` · ${DETECTIONS[a.rule_id]}`}
+                      </div>
+                    </Td>
+                    <Td>
+                      {a.agent_id ? (
+                        <Link to={`/agents/${a.agent_id}`} onClick={(e) => e.stopPropagation()} className={cx("rounded whitespace-nowrap hover:text-accent", focusRing)}>
+                          {a.agent_name ?? a.agent_id}
+                        </Link>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </Td>
+                    <Td className={response?.tone === "critical" ? "text-critical-ink" : "text-muted"}>{response?.text ?? "—"}</Td>
+                    <Td className="text-muted">
+                      <TimeAgo value={a.ts} />
+                    </Td>
+                    <Td>
+                      <StatusPill status={a.status} />
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </TBody>
+          </Table>
         )}
       </Card>
-      <Drawer open={!!open} onClose={() => setOpen(null)} title={open ? `${open.rule_id} · ${open.title}` : ""}>
+
+      <Drawer open={!!open} onClose={() => setOpenId(null)} title={open ? open.title : ""}>
         {open && (
-          <div className="space-y-5">
+          <div className="space-y-6">
             <div className="flex flex-wrap items-center gap-2">
               <SeverityPill severity={open.severity} />
               <StatusPill status={open.status} />
-              <span className="text-sm text-muted">raised {clock(open.ts)}</span>
+              <span className="text-caption text-muted">
+                <span className="font-mono">{open.rule_id}</span> · raised {clock(open.ts)}
+              </span>
             </div>
-            {open.actions_taken.map((act, i) => (
-              <div key={i} className="rounded-xl border border-critical/30 bg-critical/8 p-4">
-                <div className="mb-2 flex items-center gap-2 font-medium text-critical-ink">
-                  <Ban className="size-4" /> Automatic response
-                </div>
-                <div className="text-sm text-muted">
+            {DETECTIONS[open.rule_id] && <p className="text-sm text-muted">{DETECTIONS[open.rule_id]}.</p>}
+            {open.actions_taken.map((act, i) =>
+              act.blast_radius ? (
+                <Callout key={i} tone="critical" title="Automatic response">
                   Suspended the agent, disabled its identity, revoked <b className="text-fg">{act.blast_radius.mandates.length}</b> mandates across{" "}
                   <b className="text-fg">{act.blast_radius.agents_affected.length}</b> agents and cancelled {act.blast_radius.pending_approvals.length} pending approvals.
-                </div>
-              </div>
-            ))}
-            <Investigation key={open.id} alertId={open.id} onUpdate={status => setOpen(a => a ? { ...a, status } : a)} />
+                </Callout>
+              ) : (
+                <Callout key={i} tone="info" title="Automatic response">
+                  {act.action === "owner_reassigned" ? `Ownership reassigned${act.from ? ` from ${act.from}` : ""}${act.to ? ` to ${act.to}` : ""}.` : titleCase(act.action)}
+                </Callout>
+              ),
+            )}
+            <Investigation key={open.id} alertId={open.id} onUpdate={() => void alerts.refetch()} />
             {typeof open.evidence.mandate === "string" && (
-              <Link to={`/access`} className="text-sm text-accent hover:underline">
+              <Link to="/access" className={cx("inline-block rounded text-sm text-accent hover:underline", focusRing)}>
                 Mandate {String(open.evidence.mandate)}
               </Link>
             )}
-            <div>
-              <div className="mb-2 text-xs font-semibold tracking-wide text-muted uppercase">Evidence</div>
-              <JsonBlock value={open.evidence} />
-            </div>
+            <details className="group">
+              <summary className={cx("cursor-pointer rounded text-sm font-medium text-fg", focusRing)}>Evidence</summary>
+              <div className="mt-2">
+                <JsonBlock value={open.evidence} />
+              </div>
+            </details>
           </div>
         )}
       </Drawer>
