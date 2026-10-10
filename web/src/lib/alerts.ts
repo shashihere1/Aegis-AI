@@ -12,6 +12,9 @@ export const DETECTIONS: Record<string, string> = {
   "DET-12": "Orphaned agent (owner left)",
   "DET-13": "Adaptive risk reached the critical tier",
   "DET-14": "Agent attestation overdue (owner has not re-confirmed)",
+  "DET-15": "Delegation permission widening blocked",
+  "DET-16": "Estimated daily model budget reached 80%",
+  "DET-17": "Model request denied before Azure because of budget",
 };
 
 /**

@@ -603,7 +603,12 @@ def create_gateway(
                         claims,
                         "llm.chat",
                         verdict,
-                        snapshot={"provider": "azure-openai", "model_policy": reservation["policy"]},
+                        snapshot={
+                            "provider": "azure-openai",
+                            "model_policy": reservation["policy"],
+                            "budget": reservation.get("budget", {}),
+                            "provider_called": False,
+                        },
                         started=started,
                     )
                     return JSONResponse(

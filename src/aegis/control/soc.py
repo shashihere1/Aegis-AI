@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aegis.common.ids import new_id
 from aegis.common.models import AgentStatus
-from aegis.control import investigations, ledger
+from aegis.control import investigations, ledger, siem
 from aegis.control.auth import OPERATORS, require_roles
 from aegis.control.context import ControlContext, ctx, session
 from aegis.control.discovery import record_signal
@@ -51,11 +51,58 @@ async def raise_alert(
             # Response playbook: contain first, investigate second.
             radius = await sts.suspend_agent(c, s, agent_id, f"{rule_id}: {title}", "soc-playbook")
             alert.actions_taken = [{"action": "suspend_agent", "agent": agent_id, "blast_radius": radius}]
+    await siem.enqueue(c, s, alert)
     return alert
 
 
 async def on_decision(c: ControlContext, s: AsyncSession, record: DecisionRecord) -> None:
     rules = {r.get("rule") for r in record.reasons}
+    if record.decision == "deny" and "LLM-BUDGET" in rules and record.agent_id:
+        # One block alert per agent/day/model-policy; repeated denials are still individually audited.
+        await s.flush()
+        since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        prior = list(
+            await s.scalars(
+                select(Alert).where(Alert.agent_id == record.agent_id, Alert.rule_id == "DET-17", Alert.ts >= since)
+            )
+        )
+        if not any(a.evidence.get("policy_version") == record.policy_version for a in prior):
+            await raise_alert(
+                c,
+                s,
+                "DET-17",
+                "high",
+                "Model request blocked by estimated daily budget",
+                record.agent_id,
+                {
+                    "decision": record.id,
+                    "root_id": record.root_id,
+                    "mandate_id": record.mandate_id,
+                    "trace_id": record.trace_id,
+                    "reasons": record.reasons,
+                    "policy_version": record.policy_version,
+                    "daily_budget_eur": record.input_snapshot.get("model_policy", {}).get("daily_budget_eur"),
+                    **record.input_snapshot.get("budget", {}),
+                },
+            )
+    if record.decision == "deny" and "DLG-004" in rules and record.root_id and record.agent_id:
+        await raise_alert(
+            c,
+            s,
+            "DET-15",
+            "high",
+            "Delegation permission widening blocked",
+            record.agent_id,
+            {
+                "decision": record.id,
+                "root_id": record.root_id,
+                "mandate_id": record.mandate_id,
+                "subject": record.subject,
+                "trace_id": record.trace_id,
+                "reasons": record.reasons,
+                **record.input_snapshot.get("delegation", {}),
+            },
+        )
     if record.decision == "deny" and "IFC-001" in rules:
         await raise_alert(
             c,
@@ -213,8 +260,9 @@ def task_outcome(root: Mandate, decisions: list[DecisionRecord], approvals: list
     """Outcome of one task from its root Mandate, the latest outcome per tool, and its approvals.
 
     Only statuses and counts are used; never tool results, arguments or customer data."""
-    calls = Counter(call_outcome(d) for d in decisions)
-    latest = {d.action: call_outcome(d) for d in decisions}  # decisions are in time order, so the last one wins
+    tool_decisions = [d for d in decisions if not d.action.startswith(("a2a:", "sts."))]
+    calls = Counter(call_outcome(d) for d in tool_decisions)
+    latest = {d.action: call_outcome(d) for d in tool_decisions}
     expires = root.expires_at if root.expires_at.tzinfo else root.expires_at.replace(tzinfo=UTC)
     if root.status == "revoked":
         outcome = "revoked"
@@ -222,7 +270,11 @@ def task_outcome(root: Mandate, decisions: list[DecisionRecord], approvals: list
         outcome = "waiting"
     elif any(o in FAILED for o in latest.values()):
         outcome = "failed"
-    elif not calls["executed"] and (calls["denied"] or calls["rate_limited"]):
+    elif not calls["executed"] and (
+        calls["denied"]
+        or calls["rate_limited"]
+        or any(d.action == "sts.token_exchange" and d.decision == "deny" for d in decisions)
+    ):
         outcome = "blocked"
     elif root.status == "completed":
         outcome = "completed"
@@ -256,14 +308,40 @@ def lineage_graph(
         if m.parent_id not in by_id:
             nodes.setdefault(m.subject, {"id": m.subject, "kind": "user", "label": m.subject.split(":", 1)[-1]})
         agent = f"agent:{m.agent_id}"
-        node = nodes.setdefault(agent, {"id": agent, "kind": "agent", "label": names.get(m.agent_id, m.agent_id),
-                                        "depth": m.depth})
+        node = nodes.setdefault(
+            agent, {"id": agent, "kind": "agent", "label": names.get(m.agent_id, m.agent_id), "depth": m.depth}
+        )
         node.update(mandate=m.id, status=m.status, intent_categories=m.intent_categories)
         node["depth"] = min(node["depth"], m.depth)
         source = f"agent:{by_id[m.parent_id].agent_id}" if m.parent_id in by_id else m.subject
         edge(source, agent, "delegated_to" if m.parent_id else "initiated")["intent"] = m.intent
 
-    tool_calls = [d for d in decisions if not d.action.startswith("a2a:")]  # delegations are agent -> agent edges
+    for d in decisions:
+        attempt = (d.input_snapshot or {}).get("delegation", {})
+        target = attempt.get("target_agent_id")
+        if d.action == "sts.token_exchange" and d.decision == "deny" and target and d.agent_id:
+            parent = by_id.get(d.mandate_id)
+            target_node = f"agent:{target}"
+            nodes.setdefault(
+                target_node,
+                {
+                    "id": target_node,
+                    "kind": "agent",
+                    "label": names.get(target, target),
+                    "depth": parent.depth + 1 if parent else 1,
+                    "status": "attempted_only",
+                },
+            )
+            e = edge(f"agent:{d.agent_id}", target_node, "attempted_delegation")
+            e["decisions"]["deny"] = e["decisions"].get("deny", 0) + 1
+            e.update(
+                decision="deny",
+                rules=[r.get("rule") for r in d.reasons],
+                decision_id=d.id,
+                reason="; ".join(r.get("message", "") for r in d.reasons),
+            )
+
+    tool_calls = [d for d in decisions if not d.action.startswith(("a2a:", "sts."))]
     for d in tool_calls:
         tool = f"tool:{d.action}"
         outcome = call_outcome(d)
@@ -285,8 +363,11 @@ def lineage_graph(
         node = nodes.setdefault(key, {"id": key, "kind": "approval", "statuses": {}})
         node["statuses"][a.status] = node["statuses"].get(a.status, 0) + 1
         if not aggregate:
-            node.update(approval_status=a.status, approver=a.approver,
-                        label=APPROVAL_LABEL.get(a.status, a.status).format(approver=a.approver or "—"))
+            node.update(
+                approval_status=a.status,
+                approver=a.approver,
+                label=APPROVAL_LABEL.get(a.status, a.status).format(approver=a.approver or "—"),
+            )
         edge(tool, key, "approval")
     if aggregate:
         for node in nodes.values():
@@ -299,7 +380,7 @@ def lineage_graph(
             ids = {x.id for x in mandates if x.root_id == m.root_id}
             by_root[m.root_id] = task_outcome(
                 m,
-                [d for d in tool_calls if d.root_id == m.root_id],
+                [d for d in decisions if d.root_id == m.root_id],
                 [a for a in approvals if a.mandate_id in ids],
             )
     if by_root:
@@ -307,16 +388,26 @@ def lineage_graph(
         calls = sum((c for _, c in by_root.values()), Counter())
         worst = next(o for o in TASK_OUTCOMES if tasks[o])
         if aggregate:
-            result = {"id": "result:tasks", "kind": "result", "label": f"{sum(tasks.values())} tasks",
-                      "outcome": worst, "task_outcomes": dict(tasks),
-                      "detail": " · ".join(f"{tasks[o]} {TASK_LABEL[o].lower()}" for o in TASK_OUTCOMES if tasks[o])}
+            result = {
+                "id": "result:tasks",
+                "kind": "result",
+                "label": f"{sum(tasks.values())} tasks",
+                "outcome": worst,
+                "task_outcomes": dict(tasks),
+                "detail": " · ".join(f"{tasks[o]} {TASK_LABEL[o].lower()}" for o in TASK_OUTCOMES if tasks[o]),
+            }
         else:
             root = next(m for m in mandates if m.parent_id is None)
             detail = summarise(calls) or "no tool calls"
             if worst == "revoked" and root.revoked_reason:
                 detail = f"{root.revoked_reason} · {detail}"
-            result = {"id": f"result:{root.root_id}", "kind": "result", "label": TASK_LABEL[worst],
-                      "outcome": worst, "detail": detail}
+            result = {
+                "id": f"result:{root.root_id}",
+                "kind": "result",
+                "label": TASK_LABEL[worst],
+                "outcome": worst,
+                "detail": detail,
+            }
         result["calls"] = dict(calls)
         leaves = [n for n in nodes if n not in {f for f, _, _ in edges}]
         nodes[result["id"]] = result
@@ -450,12 +541,16 @@ def router() -> APIRouter:
         ).all()
         approvals = (
             await s.scalars(
-                select(Approval)
-                .where(Approval.mandate_id.in_([m.id for m in mandates]))
-                .order_by(Approval.created_at)
+                select(Approval).where(Approval.mandate_id.in_([m.id for m in mandates])).order_by(Approval.created_at)
             )
         ).all()
-        names = await agent_names(s, [m.agent_id for m in mandates])
+        names = await agent_names(
+            s,
+            [
+                *[m.agent_id for m in mandates],
+                *[d.input_snapshot.get("delegation", {}).get("target_agent_id") for d in decisions],
+            ],
+        )
         return mandates, decisions, approvals, names
 
     @r.get("/lineage/{root_id}")

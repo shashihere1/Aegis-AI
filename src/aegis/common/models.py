@@ -73,8 +73,15 @@ class AgentPatch(BaseModel):
     endpoint_url: str | None = None
 
 
-MATERIAL_FIELDS = {"purpose", "intent_categories", "capabilities", "max_data_class", "can_delegate_to",
-                   "can_receive_from"}
+MATERIAL_FIELDS = {
+    "purpose",
+    "intent_categories",
+    "capabilities",
+    "max_data_class",
+    "can_delegate_to",
+    "can_receive_from",
+    "endpoint_url",
+}
 
 
 class ToolClassification(BaseModel):

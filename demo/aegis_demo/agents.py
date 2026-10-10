@@ -128,6 +128,7 @@ def payments_agent_app() -> FastAPI:
             }
         return {"jsonrpc": "2.0", "id": body.get("id"), "result": a2a_result("completed", structured(result))}
 
+    app.state.handle_message = send_message
     return app
 
 

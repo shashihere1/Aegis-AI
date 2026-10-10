@@ -8,14 +8,15 @@ import {
 } from "lucide-react";
 import { api, post } from "../lib/api";
 import {
-  BANK_TASKS, OPEN_BANK_STATUSES, bankReceipt, bankRunStats, bankStatusLabel, eventEstimate, lacksChangeReceipt, record,
-  type BankEvent, type BankMode, type BankRun, type BankStatus,
+  BANK_TASKS, DELEGATION_TEST_PROMPT, OPEN_BANK_STATUSES, bankReceipt, bankRunStats, bankStatusLabel, eventEstimate, lacksChangeReceipt, record,
+  type BankEvent, type BankMode, type BankRun, type BankStatus, type RuntimePairs,
 } from "../lib/bank-assistant";
 import { euro, titleCase } from "../lib/format";
 import { useSession } from "../lib/session";
 import {
-  Badge, Button, Callout, Card, EmptyState, ErrorState, JsonBlock, PageHeader, Skeleton, SkeletonRows, Spinner, Stat, StatGroup, Textarea, cx, focusRing,
+  Badge, Button, Callout, Card, EmptyState, ErrorState, Field, JsonBlock, PageHeader, Select, Skeleton, SkeletonRows, Spinner, Stat, StatGroup, Textarea, cx, focusRing,
 } from "../components/ui";
+import { RunGovernanceProof } from "../components/RunGovernanceProof";
 
 const TASK_ICONS: Record<BankMode, LucideIcon> = {
   inquiry: Wallet, documents: FileCheck2, address: MapPin, transfer: ArrowUpRight,
@@ -187,25 +188,35 @@ export function BankAssistant() {
   const [runId, setRunId] = useState<string | null>(null);
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [allHistory, setAllHistory] = useState(false);
-  const status = useQuery({ queryKey: ["live-agent-status", persona?.username],
-    queryFn: () => api<BankStatus>("/demo/api/agent/status"), refetchInterval: 4000 });
+  const [coordinator, setCoordinator] = useState("");
+  const [securityTest, setSecurityTest] = useState(false);
+  const pairs = useQuery({ queryKey: ["bank-runtime-pairs", persona?.username],
+    queryFn: () => api<RuntimePairs>("/demo/api/walkthrough/pairs"), refetchInterval: 3000 });
+  const pair = pairs.data?.items.find(item => item.coordinator_id === coordinator);
+  const pairReady = !coordinator || !!(pair?.connected && pair.coordinator_status === "active" && pair.payments_status === "active");
+  const pairModeAllowed = !coordinator || mode === "inquiry" || mode === "transfer";
+  const status = useQuery({ queryKey: ["live-agent-status", persona?.username, coordinator],
+    queryFn: () => api<BankStatus>("/demo/api/agent/status", { query: { coordinator_id: coordinator || undefined } }), refetchInterval: 4000 });
   const history = useQuery({ queryKey: ["live-agent-history", persona?.username],
     queryFn: () => api<BankRun[]>("/demo/api/agent/runs"), refetchInterval: 2000 });
   const selected = useQuery({ queryKey: ["live-agent-run", persona?.username, runId],
     queryFn: () => api<BankRun>(`/demo/api/agent/runs/${runId}`), enabled: !!runId, refetchInterval: 1000 });
   const run = selected.data;
   const openRun = history.data?.find(item => item.subject === persona?.username && OPEN_BANK_STATUSES.includes(item.status));
-  useEffect(() => { setRunId(null); setConsent(false); setAllHistory(false); setRequestId(crypto.randomUUID()); }, [persona?.username]);
+  useEffect(() => { setRunId(null); setConsent(false); setSecurityTest(false); setAllHistory(false); setRequestId(crypto.randomUUID()); }, [persona?.username]);
   useEffect(() => { if (!runId && openRun) setRunId(openRun.id); }, [runId, openRun]);
   const start = useMutation({ retry: false, mutationFn: () => post<BankRun>("/demo/api/agent/runs", {
     request_id: requestId, mode, message, confirm_synthetic_external_call: true,
+    coordinator_id: coordinator || null, walkthrough_case: securityTest ? "delegation_widening" : "normal",
+    auto_resume: !!coordinator,
   }), onSuccess: item => { setRunId(item.id); setConsent(false); setRequestId(crypto.randomUUID()); queryClient.invalidateQueries(); } });
   const proceed = useMutation({ retry: false, mutationFn: (action: string) =>
     post<BankRun>(`/demo/api/agent/runs/${runId}/continue`, { action }),
     onSuccess: () => queryClient.invalidateQueries() });
   const error = start.error ?? proceed.error ?? selected.error ?? history.error ?? status.error;
   const busy = !!openRun || start.isPending;
-  const canStart = customer && consent && !!status.data?.ready && !busy && !history.isPending && !history.isError && message.trim().length >= 3;
+  const canStart = customer && consent && pairReady && pairModeAllowed && (securityTest ? !!coordinator : !!status.data?.ready)
+    && !busy && !history.isPending && !history.isError && message.trim().length >= 3;
   const canContinue = customer && run?.subject === persona?.username && run.resumable;
   const stats = run ? bankRunStats(run.events) : null;
   const highlights = run?.events.filter(event => bankReceipt(event) !== null) ?? [];
@@ -214,7 +225,10 @@ export function BankAssistant() {
     : history.isPending ? "Checking for an existing task…"
     : history.isError ? "Task history is unavailable. Wait for it to reconnect before starting a task."
     : openRun ? "Finish or cancel your open task before starting another."
-    : !status.data?.ready ? "The runtime must be ready before you can start."
+    : !pairReady ? "The selected agent pair must be approved, connected and active."
+    : !pairModeAllowed ? "This pair supports inquiries and transfers only. Choose default Ava for document/address tasks."
+    : securityTest && !coordinator ? "Choose a registered pair for the bounded security test."
+    : !securityTest && !status.data?.ready ? "The runtime must be ready before you can start."
     : !consent ? "Confirm synthetic data and paid Azure inference to continue."
     : message.trim().length < 3 ? "Enter a request of at least 3 characters." : null;
 
@@ -250,7 +264,53 @@ export function BankAssistant() {
       <div className="min-w-0 space-y-6">
         <Card title="Start a customer task" action={<span className="text-caption text-muted">01 · Request</span>}>
           <form className="p-5" onSubmit={event => { event.preventDefault(); if (canStart) start.mutate(); }}>
-            <fieldset className="min-w-0" disabled={busy}>
+            <fieldset disabled={busy} className="mb-5 space-y-3">
+              <Field label="Executing agent pair" hint="Pair transfers resume automatically after independent approval.">
+                <Select
+                  label="Executing agent pair"
+                  value={coordinator}
+                  className="w-full"
+                  onChange={(value) => {
+                    setCoordinator(value);
+                    setSecurityTest(false);
+                    setConsent(false);
+                    setRequestId(crypto.randomUUID());
+                    start.reset();
+                  }}
+                  options={[
+                    { value: "", label: "Default Ava / Payments (also supports KYC)" },
+                    ...(pairs.data?.items ?? []).map((item) => ({ value: item.coordinator_id, label: `${item.name} · ${item.connected ? item.coordinator_status : "not connected"}` })),
+                  ]}
+                />
+              </Field>
+              <p className="text-caption text-muted">
+                Register, independently approve and connect pairs in <Link to="/walkthrough" className={linkClass}>Security Walkthrough</Link>.
+              </p>
+              <label className={cx("flex cursor-pointer items-start gap-2 rounded text-caption", wrapFocus)}>
+                <input
+                  type="checkbox"
+                  checked={securityTest}
+                  disabled={!coordinator || !customer}
+                  className="mt-0.5 size-4 shrink-0 accent-accent"
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setSecurityTest(enabled);
+                    setConsent(false);
+                    setMode("transfer");
+                    setMessage(enabled ? DELEGATION_TEST_PROMPT : BANK_TASKS.transfer.example);
+                    setRequestId(crypto.randomUUID());
+                  }}
+                />
+                <span>Enable bounded permission-widening security test</span>
+              </label>
+              {securityTest && (
+                <Callout tone="warning" title="Security test mode">
+                  This request describes the selected test. The explicit test mode submits a real forbidden delegation to the token service; Azure does not interpret the prompt.
+                  Expect DLG-004, a linked alert and no bank call. Normal prompts never silently enable this test.
+                </Callout>
+              )}
+            </fieldset>
+            <fieldset className="min-w-0" disabled={busy || securityTest}>
               <legend className="text-sm font-medium text-fg">What would you like to do?</legend>
               <p className="mt-1 text-caption text-muted">Your purpose limits the Mandate and the available tools.</p>
               <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -269,15 +329,15 @@ export function BankAssistant() {
               </div>
             </fieldset>
             <div className="mt-5 flex items-center justify-between gap-2"><label htmlFor="bank-request" className="text-sm font-medium text-fg">Your request</label>
-              <Button type="button" variant="link" disabled={busy} onClick={() => setMessage(BANK_TASKS[mode].example)}>Use example</Button></div>
+              <Button type="button" variant="link" disabled={busy} onClick={() => setMessage(securityTest ? DELEGATION_TEST_PROMPT : BANK_TASKS[mode].example)}>Use example</Button></div>
             <Textarea id="bank-request" rows={4} maxLength={1500} value={message} onChange={event => setMessage(event.target.value)} disabled={busy}
               aria-describedby="bank-request-hint" placeholder="Tell Ava what you need…" className="mt-2 min-h-28 resize-y disabled:opacity-60" />
             <div id="bank-request-hint" className="mt-1.5 flex justify-between gap-2 text-caption text-muted"><span>Synthetic data only. Never paste real customer details.</span><span className="tabular shrink-0">{message.length} / 1,500</span></div>
             <label className={cx("my-4 flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-inset p-3.5 text-sm leading-relaxed", wrapFocus)}>
               <input type="checkbox" checked={consent} disabled={busy || !customer} onChange={event => setConsent(event.target.checked)} className="mt-0.5 size-4 shrink-0 accent-accent" />
-              <span>I am using synthetic data and authorize <span className="font-semibold text-fg">paid Azure inference</span> for this task.</span>
+              <span>{securityTest ? "I authorize this synthetic security test. It makes no Azure request and cannot execute a banking action." : <>I am using synthetic data and authorize <span className="font-semibold text-fg">paid Azure inference</span> for this task.</>}</span>
             </label>
-            <Button type="submit" variant="primary" className="w-full" icon={Send} loading={start.isPending} disabled={!canStart}>Ask Ava</Button>
+            <Button type="submit" variant="primary" className="w-full" icon={Send} loading={start.isPending} disabled={!canStart}>{securityTest ? "Run permission-widening test" : "Ask Ava"}</Button>
             <p aria-live="polite" className={cx("text-caption leading-relaxed text-muted", disabledReason && "mt-2.5")}>{disabledReason}</p>
             {openRun && openRun.id !== runId && <button type="button" className={cx(linkClass, "mt-2 text-caption")} onClick={() => setRunId(openRun.id)}>View your open task <ArrowRight className="size-3" /></button>}
           </form>
@@ -334,10 +394,10 @@ export function BankAssistant() {
               {!customer && <p className="text-caption">Only the initiating customer can confirm this action.</p>}
             </Callout>}
             {run.status === "approval_required" && <Callout tone="warning" icon={ShieldCheck} className="mt-5" title="Separate risk approval required">
-              <p className="text-caption leading-relaxed">Customer confirmation is not risk approval. A risk approver must review the matching request in Approvals. Then Jan can resume while the Mandate is still valid.</p>
+              <p className="text-caption leading-relaxed">Customer confirmation is not risk approval. A risk approver must review the matching request in Approvals.{run.auto_resume ? " This confirmed action resumes automatically once while its Mandate is valid." : " Then Jan can resume while the Mandate is still valid."}</p>
               {run.pending.approval_id && <p className="mt-3 font-mono text-xs break-all text-warning-ink">{run.pending.approval_id}</p>}
               {source === "dev" && <p className="mt-2 text-caption">For the demo: switch to Sanne Bakker to approve, then return to Jan.</p>}
-              <div className="mt-3 flex flex-wrap items-center gap-3">{canContinue && <Button icon={ArrowRight} className="h-auto min-h-9 py-2 whitespace-normal" loading={proceed.isPending} onClick={() => proceed.mutate("resume_approval")}>Resume after risk approval</Button>}
+              <div className="mt-3 flex flex-wrap items-center gap-3">{canContinue && !run.auto_resume && <Button icon={ArrowRight} className="h-auto min-h-9 py-2 whitespace-normal" loading={proceed.isPending} onClick={() => proceed.mutate("resume_approval")}>Resume after risk approval</Button>}
                 {!customer && <Link className={linkClass} to="/approvals">Open Approvals <ArrowUpRight className="size-3.5" /></Link>}</div>
               {!run.resumable && <p className="mt-2 text-caption text-warning-ink">This stored run cannot resume. Review the receipts before a new payment.</p>}
             </Callout>}
@@ -364,6 +424,7 @@ export function BankAssistant() {
               {!customer && run.root_id && <Link className={linkClass} to={`/lineage/${run.root_id}`}>Open lineage <ArrowUpRight className="size-3.5" /></Link>}
               {!customer && <Link className={linkClass} to="/usage">Usage &amp; cost <ArrowUpRight className="size-3.5" /></Link>}
             </div>
+            <RunGovernanceProof run={run} />
             <div className="mt-5 flex items-start gap-2 border-t border-line pt-4 text-caption leading-relaxed text-muted"><LockKeyhole className="mt-0.5 size-3.5 shrink-0" />
               <p>Model prose is not evidence of execution. Successful actions have verified receipts. No automatic write retries. History persists in the configured database; pending tasks cannot resume after a server restart.</p></div>
           </div>}

@@ -3,11 +3,29 @@ import { Coins } from "lucide-react";
 import { api } from "../lib/api";
 import { compact, euro } from "../lib/format";
 import type { Usage } from "../lib/types";
-import { Card, EmptyState, ErrorState, PageHeader, Skeleton, SkeletonRows, Stat, StatGroup, TBody, THead, Table, Td, Th, Tr } from "../components/ui";
+import { Card, EmptyState, ErrorState, PageHeader, Pill, Skeleton, SkeletonRows, Stat, StatGroup, TBody, THead, Table, Td, Th, Tr } from "../components/ui";
 import { BarList } from "../components/charts";
 
 export function UsagePage() {
   const usage = useQuery({ queryKey: ["usage"], queryFn: () => api<Usage[]>("/v1/usage"), refetchInterval: 4000 });
+  const budgets = useQuery({
+    queryKey: ["model-budgets"],
+    queryFn: () =>
+      api<{
+        items: {
+          agent_id: string;
+          agent_name: string;
+          daily_budget_eur: number;
+          used_or_reserved_eur: number;
+          remaining_estimate_eur: number;
+          outstanding_holds: number;
+          blocked_requests: number;
+          state: string;
+          day_utc: string;
+        }[];
+      }>("/v1/model-budgets"),
+    refetchInterval: 4000,
+  });
   const rows = usage.data ?? [];
   const tokens = rows.reduce((s, r) => s + r.input_tokens + r.output_tokens, 0);
   const cost = rows.reduce((s, r) => s + r.cost_eur, 0);
@@ -24,6 +42,42 @@ export function UsagePage() {
         <Stat label="Cost" value={ready ? euro(cost, 4) : "—"} caption="At the configured price per 1K tokens" />
         <Stat label="Average latency" value={ready ? `${latency.toFixed(0)} ms` : "—"} caption="Weighted by calls" />
       </StatGroup>
+
+      <Card
+        title="Model budget policy"
+        description="Estimated daily limit per agent, reset each UTC day. Reservations count before Azure is called; a request whose hold would exceed the limit is denied, with an alert at 80%. Configured estimates, not Azure invoice amounts."
+        className="mb-8 overflow-hidden"
+      >
+        {budgets.isError && <p role="alert" className="px-5 py-4 text-critical-ink">Budget policy status unavailable.</p>}
+        {budgets.data && (
+          <Table>
+            <THead>
+              <Th>Agent</Th>
+              <Th numeric>Daily limit</Th>
+              <Th numeric>Used / reserved</Th>
+              <Th numeric>Remaining</Th>
+              <Th numeric>Holds</Th>
+              <Th numeric>Blocked today</Th>
+              <Th>State</Th>
+            </THead>
+            <TBody>
+              {budgets.data.items.map((item) => (
+                <Tr key={item.agent_id}>
+                  <Td className="font-medium">{item.agent_name}</Td>
+                  <Td numeric>{euro(item.daily_budget_eur, 4)}</Td>
+                  <Td numeric>{euro(item.used_or_reserved_eur, 6)}</Td>
+                  <Td numeric>{euro(item.remaining_estimate_eur, 6)}</Td>
+                  <Td numeric>{item.outstanding_holds}</Td>
+                  <Td numeric>{item.blocked_requests}</Td>
+                  <Td>
+                    <Pill tone={item.state === "within_budget" ? "good" : "warning"}>{item.state.replace(/_/g, " ")}</Pill>
+                  </Td>
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        )}
+      </Card>
 
       {usage.isLoading ? (
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">

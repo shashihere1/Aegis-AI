@@ -4,6 +4,7 @@ import { ShieldCheck } from "lucide-react";
 import { useAlerts } from "../lib/queries";
 import { DETECTIONS, responseSummary } from "../lib/alerts";
 import { Investigation } from "../components/Investigation";
+import { SiemForwarding } from "../components/SiemForwarding";
 import { clock, titleCase } from "../lib/format";
 import type { Alert } from "../lib/types";
 import {
@@ -72,6 +73,8 @@ export function Alerts() {
   return (
     <>
       <PageHeader title="Alerts" subtitle="Detections raised by the SOC engine, and the response the playbook already took." />
+
+      <SiemForwarding />
 
       <TableToolbar end={<span className="tabular">{rows.length} shown{all.length >= 200 ? " · newest 200" : ""}</span>}>
         <Tabs

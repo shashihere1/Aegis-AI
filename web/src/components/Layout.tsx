@@ -23,6 +23,7 @@ import {
   Moon,
   Plug,
   Repeat,
+  Route,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -102,7 +103,13 @@ function useNav(): { section: string | null; items: NavItem[] }[] {
         { to: "/usage", label: "Usage & cost", icon: Coins },
       ],
     },
-    { section: "Assistant", items: [{ to: "/assistant", label: "Bank assistant", icon: MessageSquare }] },
+    {
+      section: "Assistant",
+      items: [
+        { to: "/assistant", label: "Bank assistant", icon: MessageSquare },
+        { to: "/walkthrough", label: "Security walkthrough", icon: Route },
+      ],
+    },
   ];
 }
 
@@ -199,6 +206,9 @@ function CustomerSidebar() {
         <NavLink to="/assistant" className={navItemClass}>
           <MessageSquare className="size-4" /> Bank assistant
         </NavLink>
+        <NavLink to="/walkthrough" className={navItemClass}>
+          <Route className="size-4" /> Security walkthrough
+        </NavLink>
       </nav>
       <p className="mx-3 mb-4 rounded-lg border border-line bg-card p-3 text-caption text-muted">
         You review your own actions. Staff approvals and audit records use separate roles.
@@ -220,6 +230,9 @@ function MobileNav({ open, onClose, customer }: { open: boolean; onClose: () => 
           <nav className="px-3 py-2">
             <NavLink to="/assistant" className={navItemClass} onClick={onClose}>
               <MessageSquare className="size-4" /> Bank assistant
+            </NavLink>
+            <NavLink to="/walkthrough" className={navItemClass} onClick={onClose}>
+              <Route className="size-4" /> Security walkthrough
             </NavLink>
           </nav>
         ) : (
@@ -420,7 +433,7 @@ export function Layout() {
   const section = location.pathname.split("/")[1] || "overview";
   const isMac = useMemo(() => /Mac|iPhone|iPad/.test(navigator.platform), []);
   useEffect(() => {
-    if (customer && section !== "assistant") navigate("/assistant", { replace: true });
+    if (customer && !["assistant", "walkthrough"].includes(section)) navigate("/assistant", { replace: true });
   }, [customer, section, navigate]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
